@@ -12,7 +12,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Request, Response
 
-from src.tenant_manager import get_tenant_by_phone_number_id
+from src.tenant_manager import get_tenant_by_phone_number_id, invalidate_tenant_cache
 from src.client_manager import get_or_create_client
 from src.conversation_manager import get_or_create_conversation, log_message
 from src.gemini_agent import process_message
@@ -184,8 +184,15 @@ async def handle_webhook(request: Request):
         access_token = tenant.get("whatsapp_access_token", "")
         tenant_id = tenant["id"]
 
-        # Mark as read
-        await mark_as_read(phone_number_id, access_token, wa_message_id)
+        # Mark as read — if 401, token may be stale: refresh from DB
+        result = await mark_as_read(phone_number_id, access_token, wa_message_id)
+        if result == "auth_error":
+            logger.info("Token expired, refreshing from DB")
+            invalidate_tenant_cache(phone_number_id)
+            tenant = await get_tenant_by_phone_number_id(phone_number_id)
+            if not tenant:
+                return Response(status_code=200)
+            access_token = tenant.get("whatsapp_access_token", "")
 
         # 2. Identify / create client
         client = await get_or_create_client(

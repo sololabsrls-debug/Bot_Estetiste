@@ -167,8 +167,8 @@ async def mark_as_read(
     phone_number_id: str,
     access_token: str,
     message_id: str,
-) -> None:
-    """Mark a message as read (blue ticks)."""
+) -> Optional[str]:
+    """Mark a message as read (blue ticks). Returns 'auth_error' on 401."""
     url = f"{GRAPH_API_BASE}/{phone_number_id}/messages"
     headers = {
         "Authorization": f"Bearer {access_token}",
@@ -181,4 +181,7 @@ async def mark_as_read(
     }
 
     async with httpx.AsyncClient(timeout=30) as client:
-        await client.post(url, json=payload, headers=headers)
+        resp = await client.post(url, json=payload, headers=headers)
+        if resp.status_code == 401:
+            return "auth_error"
+    return None
