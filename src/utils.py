@@ -75,3 +75,49 @@ def format_datetime_italian(dt: datetime) -> str:
 def format_time_range(start: str, end: str) -> str:
     """Format a time range: 'dalle 14:00 alle 15:00'."""
     return f"dalle {start} alle {end}"
+
+
+_UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
+
+
+def is_uuid(value: str) -> bool:
+    """Check if a string looks like a UUID."""
+    return bool(_UUID_RE.match(value))
+
+
+def resolve_service(sb, tenant_id: str, service_id_or_name: str) -> dict | None:
+    """
+    Resolve a service by UUID or name.
+    Returns the service row dict or None.
+    """
+    if is_uuid(service_id_or_name):
+        resp = sb.table("services").select("*").eq("id", service_id_or_name).execute()
+    else:
+        resp = (
+            sb.table("services")
+            .select("*")
+            .eq("tenant_id", tenant_id)
+            .eq("is_active", True)
+            .ilike("name", f"%{service_id_or_name}%")
+            .execute()
+        )
+    return resp.data[0] if resp.data else None
+
+
+def resolve_staff(sb, tenant_id: str, staff_id_or_name: str) -> dict | None:
+    """
+    Resolve a staff member by UUID or name.
+    Returns the staff row dict or None.
+    """
+    if is_uuid(staff_id_or_name):
+        resp = sb.table("staff").select("*").eq("id", staff_id_or_name).execute()
+    else:
+        resp = (
+            sb.table("staff")
+            .select("*")
+            .eq("tenant_id", tenant_id)
+            .eq("is_active", True)
+            .ilike("name", f"%{staff_id_or_name}%")
+            .execute()
+        )
+    return resp.data[0] if resp.data else None

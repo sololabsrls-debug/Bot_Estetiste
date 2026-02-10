@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from src.supabase_client import get_supabase
-from src.utils import format_datetime_italian
+from src.utils import format_datetime_italian, resolve_service, resolve_staff
 
 logger = logging.getLogger("BOT.tools.appointments")
 
@@ -28,15 +28,24 @@ async def book_appointment(
 
     sb = get_supabase()
 
-    # Get service duration
+    # Resolve service (by UUID or name)
     try:
-        svc = sb.table("services").select("duration_min, name, price").eq("id", service_id).execute()
-        if not svc.data:
+        service = resolve_service(sb, tenant_id, service_id)
+        if not service:
             return {"error": "Servizio non trovato."}
-        service = svc.data[0]
+        service_id = service["id"]  # Real UUID
         duration = service.get("duration_min", 30)
     except Exception as e:
         return {"error": f"Errore recupero servizio: {e}"}
+
+    # Resolve staff (by UUID or name)
+    try:
+        staff = resolve_staff(sb, tenant_id, staff_id)
+        if not staff:
+            return {"error": "Operatore non trovato."}
+        staff_id = staff["id"]  # Real UUID
+    except Exception as e:
+        return {"error": f"Errore recupero operatore: {e}"}
 
     # Build start/end datetimes
     try:

@@ -9,6 +9,7 @@ from datetime import datetime, date, timedelta, time, timezone
 from typing import Optional
 
 from src.supabase_client import get_supabase
+from src.utils import resolve_service, resolve_staff
 
 logger = logging.getLogger("BOT.tools.availability")
 
@@ -43,10 +44,11 @@ async def check_availability(
     service_name = None
     if service_id:
         try:
-            svc = sb.table("services").select("duration_min, name").eq("id", service_id).execute()
-            if svc.data:
-                service_duration = svc.data[0].get("duration_min", DEFAULT_SLOT_MINUTES)
-                service_name = svc.data[0].get("name")
+            svc = resolve_service(sb, tenant_id, service_id)
+            if svc:
+                service_duration = svc.get("duration_min", DEFAULT_SLOT_MINUTES)
+                service_name = svc.get("name")
+                service_id = svc["id"]  # Ensure we have the real UUID
         except Exception:
             pass
 
@@ -77,7 +79,11 @@ async def check_availability(
     # Get staff members to check
     try:
         if staff_id:
-            staff_list = sb.table("staff").select("id, name").eq("id", staff_id).eq("tenant_id", tenant_id).eq("is_active", True).execute()
+            resolved = resolve_staff(sb, tenant_id, staff_id)
+            if resolved:
+                staff_list = type("R", (), {"data": [{"id": resolved["id"], "name": resolved["name"]}]})()
+            else:
+                staff_list = type("R", (), {"data": []})()
         else:
             staff_list = sb.table("staff").select("id, name").eq("tenant_id", tenant_id).eq("is_active", True).execute()
     except Exception as e:
