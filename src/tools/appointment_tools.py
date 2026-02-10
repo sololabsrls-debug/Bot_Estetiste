@@ -6,10 +6,14 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+import pytz
+
 from src.supabase_client import get_supabase
 from src.utils import format_datetime_italian, resolve_service, resolve_staff
 
 logger = logging.getLogger("BOT.tools.appointments")
+
+ROME_TZ = pytz.timezone("Europe/Rome")
 
 
 async def book_appointment(
@@ -47,9 +51,10 @@ async def book_appointment(
     except Exception as e:
         return {"error": f"Errore recupero operatore: {e}"}
 
-    # Build start/end datetimes
+    # Build start/end datetimes (interpret as Italian time)
     try:
-        start_dt = datetime.strptime(f"{date} {time}", "%Y-%m-%d %H:%M")
+        naive_dt = datetime.strptime(f"{date} {time}", "%Y-%m-%d %H:%M")
+        start_dt = ROME_TZ.localize(naive_dt)
         end_dt = start_dt + timedelta(minutes=duration)
     except ValueError:
         return {"error": "Formato data/orario non valido."}
@@ -198,12 +203,13 @@ async def modify_appointment(
     duration = appt.get("service", {}).get("duration_min", 30) if appt.get("service") else 30
 
     try:
-        new_start = datetime.strptime(f"{new_date} {new_time}", "%Y-%m-%d %H:%M")
+        naive_dt = datetime.strptime(f"{new_date} {new_time}", "%Y-%m-%d %H:%M")
+        new_start = ROME_TZ.localize(naive_dt)
         new_end = new_start + timedelta(minutes=duration)
     except ValueError:
         return {"error": "Formato data/orario non valido."}
 
-    if new_start < datetime.now():
+    if new_start < datetime.now(ROME_TZ):
         return {"error": "Non è possibile spostare nel passato."}
 
     # Check availability at new time

@@ -8,12 +8,15 @@ import logging
 from datetime import datetime, date, timedelta, time, timezone
 from typing import Optional
 
+import pytz
+
 from src.supabase_client import get_supabase
 from src.utils import resolve_service, resolve_staff
 
 logger = logging.getLogger("BOT.tools.availability")
 
 DEFAULT_SLOT_MINUTES = 30  # slot granularity
+ROME_TZ = pytz.timezone("Europe/Rome")
 
 
 async def check_availability(
@@ -35,7 +38,7 @@ async def check_availability(
     except ValueError:
         return {"error": "Formato data non valido. Usa YYYY-MM-DD."}
 
-    today = datetime.now(timezone.utc).date()
+    today = datetime.now(ROME_TZ).date()
     if target_date < today:
         return {"error": "Non è possibile prenotare nel passato."}
 
@@ -139,8 +142,8 @@ async def check_availability(
         booked_intervals = []
         for appt in appts_response.data:
             try:
-                a_start = datetime.fromisoformat(appt["start_at"].replace("Z", "+00:00")).replace(tzinfo=None)
-                a_end = datetime.fromisoformat(appt["end_at"].replace("Z", "+00:00")).replace(tzinfo=None)
+                a_start = datetime.fromisoformat(appt["start_at"].replace("Z", "+00:00")).astimezone(ROME_TZ)
+                a_end = datetime.fromisoformat(appt["end_at"].replace("Z", "+00:00")).astimezone(ROME_TZ)
                 booked_intervals.append((a_start.time(), a_end.time()))
             except Exception:
                 pass
@@ -160,7 +163,7 @@ async def check_availability(
 
                 # Skip past slots for today
                 if target_date == today:
-                    now_time = datetime.now().time()
+                    now_time = datetime.now(ROME_TZ).time()
                     if slot_start <= now_time:
                         current += timedelta(minutes=DEFAULT_SLOT_MINUTES)
                         continue
