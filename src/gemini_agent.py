@@ -13,6 +13,7 @@ from google import genai
 from google.genai import types
 
 from src.conversation_manager import get_conversation_history
+from src.supabase_client import get_supabase
 from src.tools import ALL_TOOLS
 from src.utils import format_date_italian
 
@@ -21,7 +22,66 @@ logger = logging.getLogger("BOT.gemini")
 MAX_TOOL_ROUNDS = 5
 
 
-def _build_system_prompt(tenant: dict, client: dict) -> str:
+def _fetch_tenant_services(tenant_id: str) -> list[dict]:
+    """Fetch active services for a tenant from Supabase."""
+    sb = get_supabase()
+    try:
+        response = (
+            sb.table("services")
+            .select("id, name, description, descrizione_breve, duration_min, price")
+            .eq("tenant_id", tenant_id)
+            .eq("is_active", True)
+            .order("display_order")
+            .order("name")
+            .execute()
+        )
+        return response.data or []
+    except Exception as e:
+        logger.error(f"Error fetching services for prompt: {e}")
+        return []
+
+
+def _fetch_tenant_staff(tenant_id: str) -> list[dict]:
+    """Fetch active staff for a tenant from Supabase."""
+    sb = get_supabase()
+    try:
+        response = (
+            sb.table("staff")
+            .select("id, name")
+            .eq("tenant_id", tenant_id)
+            .eq("is_active", True)
+            .order("name")
+            .execute()
+        )
+        return response.data or []
+    except Exception as e:
+        logger.error(f"Error fetching staff for prompt: {e}")
+        return []
+
+
+def _format_services_for_prompt(services: list[dict]) -> str:
+    """Format services list for inclusion in system prompt."""
+    if not services:
+        return "Nessun servizio disponibile al momento."
+    lines = []
+    for s in services:
+        desc = s.get("descrizione_breve") or s.get("description") or ""
+        price = f"€{float(s['price']):.2f}" if s.get("price") else "prezzo da definire"
+        duration = f"{s['duration_min']} min" if s.get("duration_min") else "durata da definire"
+        lines.append(f"- {s['name']} | {duration} | {price} | ID: {s['id']}")
+        if desc:
+            lines.append(f"  {desc}")
+    return "\n".join(lines)
+
+
+def _format_staff_for_prompt(staff: list[dict]) -> str:
+    """Format staff list for inclusion in system prompt."""
+    if not staff:
+        return "Nessun operatore disponibile al momento."
+    return "\n".join(f"- {s['name']} | ID: {s['id']}" for s in staff)
+
+
+def _build_system_prompt(tenant: dict, client: dict, services: list[dict], staff: list[dict]) -> str:
     """Build the system prompt with tenant and client context."""
     tenant_name = tenant.get("name", "Centro Estetico")
     tenant_phone = tenant.get("phone", "")
@@ -29,6 +89,9 @@ def _build_system_prompt(tenant: dict, client: dict) -> str:
     tenant_email = tenant.get("email", "")
 
     client_name = client.get("name") or client.get("whatsapp_name") or "Cliente"
+
+    services_text = _format_services_for_prompt(services)
+    staff_text = _format_staff_for_prompt(staff)
 
     return f"""Sei l'assistente virtuale WhatsApp di "{tenant_name}", un centro estetico.
 Rispondi sempre in italiano, con tono professionale ma cordiale e accogliente.
@@ -43,17 +106,25 @@ INFORMAZIONI CLIENTE:
 - Nome: {client_name}
 - ID: {client.get('id', 'N/A')}
 
+SERVIZI DISPONIBILI (lista completa e aggiornata dal database):
+{services_text}
+
+OPERATORI DISPONIBILI:
+{staff_text}
+
 REGOLE IMPORTANTI:
-1. Usa gli strumenti (tools) per recuperare informazioni reali dal database. NON inventare servizi, prezzi o orari.
-2. Quando il cliente chiede di prenotare, chiedi servizio, data e orario preferiti, poi usa check_availability PRIMA di confermare.
-3. Per prenotare, devi avere: servizio, data, orario. Se manca qualcosa, chiedi.
-4. Se il cliente chiede un operatore umano o hai dubbi che non riesci a risolvere, usa request_human_operator.
-5. Per mostrare disponibilità, usa check_availability con la data richiesta.
-6. Non rivelare mai che sei un bot o un'intelligenza artificiale se non esplicitamente chiesto.
-7. Formatta i messaggi in modo leggibile per WhatsApp (usa *grassetto*, _corsivo_, e emoji con parsimonia).
-8. Se il cliente saluta, rispondi cordialmente e chiedi come puoi aiutarlo.
-9. Oggi è {format_date_italian()}.
-10. Gli orari sono in formato 24h (es. 14:30, non 2:30 PM).
+1. I servizi elencati sopra sono gli UNICI servizi offerti dal centro. NON menzionare, suggerire o inventare MAI servizi che non sono presenti nella lista sopra. Se il cliente chiede un servizio non in lista, rispondi che non è disponibile e proponi quelli esistenti.
+2. Per i prezzi e le durate, usa ESCLUSIVAMENTE i dati dalla lista sopra. NON inventare prezzi o durate.
+3. Quando il cliente chiede di prenotare, chiedi servizio, data e orario preferiti, poi usa check_availability PRIMA di confermare.
+4. Per prenotare, devi avere: servizio, data, orario. Se manca qualcosa, chiedi.
+5. Se il cliente chiede un operatore umano o hai dubbi che non riesci a risolvere, usa request_human_operator.
+6. Per mostrare disponibilità, usa check_availability con la data richiesta.
+7. Non rivelare mai che sei un bot o un'intelligenza artificiale se non esplicitamente chiesto.
+8. Formatta i messaggi in modo leggibile per WhatsApp (usa *grassetto*, _corsivo_, e emoji con parsimonia).
+9. Se il cliente saluta, rispondi cordialmente e chiedi come puoi aiutarlo.
+10. Oggi è {format_date_italian()}.
+11. Gli orari sono in formato 24h (es. 14:30, non 2:30 PM).
+12. Quando il cliente chiede informazioni dettagliate su un servizio specifico, usa lo strumento get_service_info per recuperare benefici, controindicazioni e altri dettagli.
 """
 
 
@@ -233,7 +304,11 @@ async def process_message(
 
     gemini_client = genai.Client(api_key=api_key)
 
-    system_prompt = _build_system_prompt(tenant, client)
+    # Fetch fresh services and staff from Supabase for this tenant
+    services = _fetch_tenant_services(tenant["id"])
+    staff = _fetch_tenant_staff(tenant["id"])
+
+    system_prompt = _build_system_prompt(tenant, client, services, staff)
     tool_declarations = _get_tool_declarations()
 
     # Build conversation history
