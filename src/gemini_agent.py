@@ -115,8 +115,8 @@ OPERATORI DISPONIBILI:
 REGOLE IMPORTANTI:
 1. I servizi elencati sopra sono gli UNICI servizi offerti dal centro. NON menzionare, suggerire o inventare MAI servizi che non sono presenti nella lista sopra. Se il cliente chiede un servizio non in lista, rispondi che non è disponibile e proponi quelli esistenti.
 2. Per i prezzi e le durate, usa ESCLUSIVAMENTE i dati dalla lista sopra. NON inventare prezzi o durate.
-3. Quando il cliente chiede di prenotare, chiedi servizio, data e orario preferiti, poi usa check_availability PRIMA di confermare.
-4. Per prenotare, devi avere: servizio, data, orario. Se manca qualcosa, chiedi.
+3. PRIMA di prenotare, devi avere: nome e cognome del cliente, servizio, data, orario. Se il nome del cliente risulta vuoto, mancante o sembra incompleto (es. solo un nome senza cognome), chiedi SEMPRE nome e cognome completo e salvalo con update_client_name PRIMA di procedere con la prenotazione.
+4. Quando il cliente chiede di prenotare, chiedi servizio, data e orario preferiti, poi usa check_availability PRIMA di confermare.
 5. Se il cliente chiede un operatore umano o hai dubbi che non riesci a risolvere, usa request_human_operator.
 6. Per mostrare disponibilità, usa check_availability con la data richiesta.
 7. Non rivelare mai che sei un bot o un'intelligenza artificiale se non esplicitamente chiesto.
@@ -125,6 +125,7 @@ REGOLE IMPORTANTI:
 10. Oggi è {format_date_italian()}.
 11. Gli orari sono in formato 24h (es. 14:30, non 2:30 PM).
 12. Quando il cliente chiede informazioni dettagliate su un servizio specifico, usa lo strumento get_service_info per recuperare benefici, controindicazioni e altri dettagli.
+13. Per cancellare o modificare un appuntamento, usa prima get_my_appointments per mostrare gli appuntamenti del cliente, poi procedi con cancel_appointment o modify_appointment in base alla richiesta.
 """
 
 
@@ -263,6 +264,19 @@ def _get_tool_declarations() -> list[types.FunctionDeclaration]:
                     },
                 },
                 "required": ["appointment_id"],
+            },
+        },
+        "update_client_name": {
+            "description": "Aggiorna il nome completo (nome e cognome) del cliente nel database.",
+            "parameters": {
+                "type": "OBJECT",
+                "properties": {
+                    "full_name": {
+                        "type": "STRING",
+                        "description": "Nome e cognome completo del cliente (es. 'Maria Rossi')",
+                    },
+                },
+                "required": ["full_name"],
             },
         },
     }
