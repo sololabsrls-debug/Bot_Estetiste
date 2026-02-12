@@ -89,8 +89,9 @@ def _build_system_prompt(tenant: dict, client: dict, services: list[dict], staff
     tenant_email = tenant.get("email", "")
 
     client_name = client.get("name") or client.get("whatsapp_name") or ""
-    # Un nome è completo solo se ha almeno 2 parole (nome + cognome)
-    name_is_complete = len(client_name.strip().split()) >= 2 if client_name else False
+    # Il nome è valido SOLO se ha almeno 2 parole composte da lettere (no emoji, numeri, ecc.)
+    name_parts = [p for p in client_name.strip().split() if p.isalpha()] if client_name else []
+    name_is_complete = len(name_parts) >= 2
 
     services_text = _format_services_for_prompt(services)
     staff_text = _format_staff_for_prompt(staff)

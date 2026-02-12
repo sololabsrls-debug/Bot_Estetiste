@@ -26,6 +26,11 @@ async def update_client_name(
     if not full_name:
         return {"error": "Nome non valido."}
 
+    # Validazione: almeno 2 parole composte da lettere (nome + cognome)
+    name_parts = [p for p in full_name.split() if p.isalpha()]
+    if len(name_parts) < 2:
+        return {"error": "Serve nome e cognome completo (es. 'Maria Rossi'). Richiedi nuovamente."}
+
     sb = get_supabase()
 
     try:
