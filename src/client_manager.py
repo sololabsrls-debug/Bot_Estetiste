@@ -75,7 +75,7 @@ async def get_or_create_client(
             "tenant_id": tenant_id,
             "whatsapp_phone": phone,
             "phone": phone,
-            "name": contact_name or "",
+            "name": "",  # Lasciare vuoto — il bot chiederà nome e cognome vero
             "whatsapp_name": contact_name or "",
             "consent_wa": True,
         }
