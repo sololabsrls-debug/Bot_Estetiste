@@ -88,7 +88,9 @@ def _build_system_prompt(tenant: dict, client: dict, services: list[dict], staff
     tenant_address = tenant.get("address", "")
     tenant_email = tenant.get("email", "")
 
-    client_name = client.get("name") or client.get("whatsapp_name") or "Cliente"
+    client_name = client.get("name") or client.get("whatsapp_name") or ""
+    # Un nome è completo solo se ha almeno 2 parole (nome + cognome)
+    name_is_complete = len(client_name.strip().split()) >= 2 if client_name else False
 
     services_text = _format_services_for_prompt(services)
     staff_text = _format_staff_for_prompt(staff)
@@ -103,7 +105,8 @@ INFORMAZIONI CENTRO:
 - Email: {tenant_email}
 
 INFORMAZIONI CLIENTE:
-- Nome: {client_name}
+- Nome: {client_name or 'NON DISPONIBILE'}
+- Nome completo (nome + cognome): {"SI" if name_is_complete else "NO — DEVI chiedere nome e cognome completo PRIMA di qualsiasi prenotazione"}
 - ID: {client.get('id', 'N/A')}
 
 SERVIZI DISPONIBILI (lista completa e aggiornata dal database):
@@ -115,7 +118,7 @@ OPERATORI DISPONIBILI:
 REGOLE IMPORTANTI:
 1. I servizi elencati sopra sono gli UNICI servizi offerti dal centro. NON menzionare, suggerire o inventare MAI servizi che non sono presenti nella lista sopra. Se il cliente chiede un servizio non in lista, rispondi che non è disponibile e proponi quelli esistenti.
 2. Per i prezzi e le durate, usa ESCLUSIVAMENTE i dati dalla lista sopra. NON inventare prezzi o durate.
-3. PRIMA di prenotare, devi avere: nome e cognome del cliente, servizio, data, orario. Se il nome del cliente risulta vuoto, mancante o sembra incompleto (es. solo un nome senza cognome), chiedi SEMPRE nome e cognome completo e salvalo con update_client_name PRIMA di procedere con la prenotazione.
+3. PRIMA di prenotare, CONTROLLA il campo "Nome completo" sopra. Se è "NO", DEVI chiedere nome e cognome completo al cliente e salvarlo con update_client_name PRIMA di procedere. NON prenotare MAI se il nome completo è "NO". Un nome completo ha SEMPRE nome + cognome (es. "Maria Rossi", non solo "Maria").
 4. Quando il cliente chiede di prenotare, chiedi servizio, data e orario preferiti, poi usa check_availability PRIMA di confermare.
 5. Se il cliente chiede un operatore umano o hai dubbi che non riesci a risolvere, usa request_human_operator.
 6. Per mostrare disponibilità, usa check_availability con la data richiesta.
