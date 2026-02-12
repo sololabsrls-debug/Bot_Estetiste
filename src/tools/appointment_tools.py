@@ -174,7 +174,7 @@ async def get_my_appointments(
 
         appointments = []
         for appt in response.data:
-            start = datetime.fromisoformat(appt["start_at"].replace("Z", "+00:00"))
+            start = datetime.fromisoformat(appt["start_at"].replace("Z", "+00:00")).astimezone(ROME_TZ)
             appointments.append({
                 "id": appt["id"],
                 "date": format_datetime_italian(start),

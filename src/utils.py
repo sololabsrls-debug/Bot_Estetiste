@@ -64,9 +64,13 @@ def format_date_italian(d: date | None = None) -> str:
 
 def format_datetime_italian(dt: datetime) -> str:
     """
-    Format a datetime in Italian.
+    Format a datetime in Italian, always in Europe/Rome timezone.
     Example: 'giovedì 15 maggio 2025 alle 14:30'
     """
+    import pytz
+    rome = pytz.timezone("Europe/Rome")
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(rome)
     giorno = GIORNI[dt.weekday()]
     mese = MESI[dt.month]
     return f"{giorno} {dt.day} {mese} {dt.year} alle {dt.strftime('%H:%M')}"
