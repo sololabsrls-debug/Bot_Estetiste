@@ -88,10 +88,14 @@ def _build_system_prompt(tenant: dict, client: dict, services: list[dict], staff
     tenant_address = tenant.get("address", "")
     tenant_email = tenant.get("email", "")
 
-    client_name = client.get("name") or client.get("whatsapp_name") or ""
+    # Usa SOLO il campo name (verificato), mai il whatsapp_name (potrebbe essere emoji/nickname)
+    client_name = (client.get("name") or "").strip()
     # Il nome è valido SOLO se ha almeno 2 parole composte da lettere (no emoji, numeri, ecc.)
-    name_parts = [p for p in client_name.strip().split() if p.isalpha()] if client_name else []
+    name_parts = [p for p in client_name.split() if p.isalpha()] if client_name else []
     name_is_complete = len(name_parts) >= 2
+    # Se il nome non è valido, non mostrarlo a Gemini
+    if not name_is_complete:
+        client_name = ""
 
     services_text = _format_services_for_prompt(services)
     staff_text = _format_staff_for_prompt(staff)
