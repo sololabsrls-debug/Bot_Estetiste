@@ -25,6 +25,30 @@ logging.basicConfig(
 )
 logger = logging.getLogger("BOT")
 
+# Initialize Sentry (optional — only if SENTRY_DSN is set)
+_sentry_dsn = os.getenv("SENTRY_DSN")
+if _sentry_dsn:
+    try:
+        import sentry_sdk
+        from sentry_sdk.integrations.fastapi import FastApiIntegration
+        from sentry_sdk.integrations.logging import LoggingIntegration
+
+        sentry_sdk.init(
+            dsn=_sentry_dsn,
+            environment=os.getenv("ENVIRONMENT", "production"),
+            traces_sample_rate=float(os.getenv("SENTRY_TRACES_SAMPLE_RATE", "0.1")),
+            integrations=[
+                FastApiIntegration(transaction_style="endpoint"),
+                LoggingIntegration(level=logging.INFO, event_level=logging.ERROR),
+            ],
+            send_default_pii=False,
+        )
+        logger.info("Sentry inizializzato")
+    except Exception as e:
+        logger.warning(f"Impossibile inizializzare Sentry: {e}")
+else:
+    logger.info("Sentry non configurato (SENTRY_DSN non impostato)")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

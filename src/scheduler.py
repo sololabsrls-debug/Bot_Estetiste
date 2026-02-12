@@ -21,6 +21,13 @@ from src.utils import format_datetime_italian
 
 logger = logging.getLogger("BOT.scheduler")
 
+# Sentry (optional)
+try:
+    import sentry_sdk
+    _SENTRY = True
+except ImportError:
+    _SENTRY = False
+
 _scheduler: BackgroundScheduler | None = None
 
 
@@ -40,17 +47,32 @@ def _run_async(coro):
 
 def _job_reminder_24h():
     """Send reminder 24h before appointment."""
-    _run_async(_send_reminders(hours_before=24, reminder_type="reminder_24h"))
+    try:
+        _run_async(_send_reminders(hours_before=24, reminder_type="reminder_24h"))
+    except Exception as e:
+        logger.exception(f"Error in reminder_24h job: {e}")
+        if _SENTRY:
+            sentry_sdk.capture_exception(e)
 
 
 def _job_reminder_1h():
     """Send reminder 1h before appointment."""
-    _run_async(_send_reminders(hours_before=1, reminder_type="reminder_1h"))
+    try:
+        _run_async(_send_reminders(hours_before=1, reminder_type="reminder_1h"))
+    except Exception as e:
+        logger.exception(f"Error in reminder_1h job: {e}")
+        if _SENTRY:
+            sentry_sdk.capture_exception(e)
 
 
 def _job_confirm_pending():
     """Request confirmation for pending appointments."""
-    _run_async(_send_pending_confirmations())
+    try:
+        _run_async(_send_pending_confirmations())
+    except Exception as e:
+        logger.exception(f"Error in confirm_pending job: {e}")
+        if _SENTRY:
+            sentry_sdk.capture_exception(e)
 
 
 async def _send_reminders(hours_before: int, reminder_type: str):
@@ -137,6 +159,8 @@ async def _send_reminders(hours_before: int, reminder_type: str):
 
         except Exception as e:
             logger.error(f"Failed to send reminder for {appt['id']}: {e}")
+            if _SENTRY:
+                sentry_sdk.capture_exception(e)
 
 
 async def _send_pending_confirmations():
@@ -207,6 +231,8 @@ async def _send_pending_confirmations():
 
         except Exception as e:
             logger.error(f"Failed to send confirmation for {appt['id']}: {e}")
+            if _SENTRY:
+                sentry_sdk.capture_exception(e)
 
 
 def start_scheduler():

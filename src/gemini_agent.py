@@ -306,15 +306,15 @@ async def process_message(
     client: dict,
     conversation: dict,
     user_message: str,
-) -> Optional[str]:
+) -> Optional[dict]:
     """
     Process a user message through Gemini with function calling.
-    Returns the final text reply or None.
+    Returns dict {"text": str, "tool_context": {...} | None} or None.
     """
     api_key = os.getenv("GOOGLE_API_KEY")
     if not api_key:
         logger.error("GOOGLE_API_KEY not set")
-        return "Ci scusi, il servizio non è momentaneamente disponibile."
+        return {"text": "Ci scusi, il servizio non è momentaneamente disponibile.", "tool_context": None}
 
     gemini_client = genai.Client(api_key=api_key)
 
@@ -361,6 +361,10 @@ async def process_message(
         "conversation_id": conversation_id,
     }
 
+    # Track last tool call for interactive message routing
+    last_tool_name = None
+    last_tool_result = None
+
     try:
         # Function calling loop
         for round_num in range(MAX_TOOL_ROUNDS):
@@ -373,7 +377,7 @@ async def process_message(
             candidate = response.candidates[0] if response.candidates else None
             if not candidate or not candidate.content or not candidate.content.parts:
                 logger.warning("Empty Gemini response")
-                return "Ci scusi, non ho capito. Può ripetere?"
+                return {"text": "Ci scusi, non ho capito. Può ripetere?", "tool_context": None}
 
             # Check if there are function calls
             function_calls = [
@@ -387,7 +391,16 @@ async def process_message(
                     part.text for part in candidate.content.parts
                     if part.text
                 ]
-                return "\n".join(text_parts) if text_parts else None
+                text = "\n".join(text_parts) if text_parts else None
+                if text is None:
+                    return None
+                return {
+                    "text": text,
+                    "tool_context": {
+                        "last_tool": last_tool_name,
+                        "last_result": last_tool_result,
+                    } if last_tool_name else None,
+                }
 
             # Process function calls
             contents.append(candidate.content)
@@ -404,6 +417,9 @@ async def process_message(
                 if tool_fn:
                     try:
                         result = await tool_fn(**fn_args, **tool_context)
+                        # Track for interactive message routing
+                        last_tool_name = fn_name
+                        last_tool_result = result
                     except Exception as e:
                         logger.error(f"Tool {fn_name} error: {e}")
                         result = {"error": str(e)}
@@ -424,8 +440,8 @@ async def process_message(
 
         # Exhausted rounds
         logger.warning("Max tool rounds reached")
-        return "Mi scusi, sto avendo difficoltà a elaborare la richiesta. Può riprovare?"
+        return {"text": "Mi scusi, sto avendo difficoltà a elaborare la richiesta. Può riprovare?", "tool_context": None}
 
     except Exception as e:
         logger.exception(f"Gemini error: {e}")
-        return "Ci scusi, si è verificato un problema tecnico. La ricontatteremo al più presto."
+        return {"text": "Ci scusi, si è verificato un problema tecnico. La ricontatteremo al più presto.", "tool_context": None}

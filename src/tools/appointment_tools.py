@@ -16,6 +16,20 @@ logger = logging.getLogger("BOT.tools.appointments")
 ROME_TZ = pytz.timezone("Europe/Rome")
 
 
+def _build_booking_result(appt_id, service, start_dt, time_str, duration, staff_name) -> dict:
+    """Build the standard success response for a booked appointment."""
+    return {
+        "success": True,
+        "appointment_id": appt_id,
+        "service": service.get("name"),
+        "date": format_datetime_italian(start_dt),
+        "time": time_str,
+        "duration_minutes": duration,
+        "staff_name": staff_name,
+        "price": float(service["price"]) if service.get("price") else None,
+    }
+
+
 async def book_appointment(
     service_id: str,
     staff_id: str,
@@ -48,6 +62,7 @@ async def book_appointment(
         if not staff:
             return {"error": "Operatore non trovato."}
         staff_id = staff["id"]  # Real UUID
+        staff_name = staff.get("name", "")
     except Exception as e:
         return {"error": f"Errore recupero operatore: {e}"}
 
@@ -59,7 +74,35 @@ async def book_appointment(
     except ValueError:
         return {"error": "Formato data/orario non valido."}
 
-    # Verify slot is still free (double-check)
+    # ── Atomic booking via PostgreSQL RPC ────────────────────
+    try:
+        response = sb.rpc(
+            "book_appointment_atomic",
+            {
+                "p_tenant_id": tenant_id,
+                "p_client_id": client_id,
+                "p_service_id": service_id,
+                "p_staff_id": staff_id,
+                "p_start_at": start_dt.isoformat(),
+                "p_end_at": end_dt.isoformat(),
+                "p_source": "whatsapp",
+                "p_notes": "Prenotato via WhatsApp Bot",
+            }
+        ).execute()
+
+        if response.data and len(response.data) > 0:
+            result = response.data[0]
+            if result.get("success"):
+                logger.info(f"Appointment booked (atomic): {result['appointment_id']}")
+                return _build_booking_result(
+                    result["appointment_id"], service, start_dt, time, duration, staff_name
+                )
+            else:
+                return {"error": result.get("error_message", "Slot non disponibile.")}
+    except Exception as e:
+        logger.warning(f"Atomic booking RPC unavailable, using legacy: {e}")
+
+    # ── Legacy fallback (check-then-insert) ──────────────────
     try:
         overlap = (
             sb.table("appointments")
@@ -72,10 +115,9 @@ async def book_appointment(
         )
         if overlap.data:
             return {"error": "Lo slot selezionato non è più disponibile. Per favore verifica la disponibilità aggiornata."}
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Overlap check failed: {e}")
 
-    # Create appointment
     try:
         appt_data = {
             "tenant_id": tenant_id,
@@ -93,23 +135,10 @@ async def book_appointment(
 
         if response.data:
             appt = response.data[0]
-
-            # Get staff name
-            staff = sb.table("staff").select("name").eq("id", staff_id).execute()
-            staff_name = staff.data[0]["name"] if staff.data else ""
-
-            logger.info(f"Appointment booked: {appt['id']}")
-
-            return {
-                "success": True,
-                "appointment_id": appt["id"],
-                "service": service.get("name"),
-                "date": format_datetime_italian(start_dt),
-                "time": time,
-                "duration_minutes": duration,
-                "staff_name": staff_name,
-                "price": float(service["price"]) if service.get("price") else None,
-            }
+            logger.info(f"Appointment booked (legacy): {appt['id']}")
+            return _build_booking_result(
+                appt["id"], service, start_dt, time, duration, staff_name
+            )
 
     except Exception as e:
         logger.error(f"book_appointment error: {e}")
@@ -178,7 +207,7 @@ async def modify_appointment(
 
     sb = get_supabase()
 
-    # Verify ownership
+    # Verify ownership (needed for both atomic and legacy paths)
     try:
         appt_resp = (
             sb.table("appointments")
@@ -201,6 +230,7 @@ async def modify_appointment(
         return {"error": f"Errore verifica appuntamento: {e}"}
 
     duration = appt.get("service", {}).get("duration_min", 30) if appt.get("service") else 30
+    service_name = appt.get("service", {}).get("name", "") if appt.get("service") else ""
 
     try:
         naive_dt = datetime.strptime(f"{new_date} {new_time}", "%Y-%m-%d %H:%M")
@@ -212,7 +242,46 @@ async def modify_appointment(
     if new_start < datetime.now(ROME_TZ):
         return {"error": "Non è possibile spostare nel passato."}
 
-    # Check availability at new time
+    # ── Atomic modify via PostgreSQL RPC ─────────────────────
+    try:
+        response = sb.rpc(
+            "modify_appointment_atomic",
+            {
+                "p_appointment_id": appointment_id,
+                "p_client_id": client_id,
+                "p_tenant_id": tenant_id,
+                "p_new_start_at": new_start.isoformat(),
+                "p_new_end_at": new_end.isoformat(),
+            }
+        ).execute()
+
+        if response.data and len(response.data) > 0:
+            result = response.data[0]
+            if result.get("success"):
+                logger.info(f"Appointment modified (atomic): {appointment_id}")
+                # Audit log
+                try:
+                    sb.table("audit_logs").insert({
+                        "tenant_id": tenant_id,
+                        "action": "appointment_rescheduled",
+                        "target": appointment_id,
+                        "meta": {"new_start": new_start.isoformat(), "source": "whatsapp"},
+                    }).execute()
+                except Exception as e:
+                    logger.warning(f"Audit log failed: {e}")
+                return {
+                    "success": True,
+                    "appointment_id": appointment_id,
+                    "service": service_name,
+                    "new_date": format_datetime_italian(new_start),
+                    "new_time": new_time,
+                }
+            else:
+                return {"error": result.get("error_message", "Impossibile modificare.")}
+    except Exception as e:
+        logger.warning(f"Atomic modify RPC unavailable, using legacy: {e}")
+
+    # ── Legacy fallback ──────────────────────────────────────
     staff_id = appt["staff_id"]
     try:
         overlap = (
@@ -227,10 +296,9 @@ async def modify_appointment(
         )
         if overlap.data:
             return {"error": "Il nuovo orario non è disponibile."}
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Overlap check failed: {e}")
 
-    # Update appointment
     try:
         sb.table("appointments").update({
             "start_at": new_start.isoformat(),
@@ -248,10 +316,10 @@ async def modify_appointment(
                 "target": appointment_id,
                 "meta": {"new_start": new_start.isoformat(), "source": "whatsapp"},
             }).execute()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Audit log failed: {e}")
 
-        service_name = appt.get("service", {}).get("name", "") if appt.get("service") else ""
+        logger.info(f"Appointment modified (legacy): {appointment_id}")
 
         return {
             "success": True,
@@ -317,8 +385,8 @@ async def cancel_appointment(
                 "target": appointment_id,
                 "meta": {"source": "whatsapp"},
             }).execute()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Audit log failed: {e}")
 
         service_name = appt.get("service", {}).get("name", "") if appt.get("service") else ""
         start_at = appt.get("start_at", "")

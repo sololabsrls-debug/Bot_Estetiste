@@ -16,15 +16,31 @@ from src.tenant_manager import get_tenant_by_phone_number_id, invalidate_tenant_
 from src.client_manager import get_or_create_client
 from src.conversation_manager import get_or_create_conversation, log_message
 from src.gemini_agent import process_message
-from src.whatsapp_api import send_text_message, mark_as_read
+from src.whatsapp_api import (
+    send_text_message,
+    send_button_message,
+    send_list_message,
+    mark_as_read,
+)
+from src.supabase_client import get_supabase
 from src.utils import normalize_phone
 
 logger = logging.getLogger("BOT.webhook")
 router = APIRouter()
 
-# In-memory set to deduplicate messages (wa_message_id)
+# Sentry (optional)
+try:
+    import sentry_sdk
+    _SENTRY = True
+except ImportError:
+    _SENTRY = False
+
+# In-memory set to deduplicate messages (wa_message_id) — first-level cache
 _processed_messages: set[str] = set()
 MAX_DEDUP_SIZE = 10_000
+
+
+# ─── Helpers ──────────────────────────────────────────────────
 
 
 def _verify_signature(payload: bytes, signature_header: Optional[str]) -> bool:
@@ -111,6 +127,191 @@ def _extract_message(body: dict) -> Optional[dict]:
         return None
 
 
+def _add_to_dedup_cache(wa_message_id: str):
+    """Add a message id to the in-memory dedup cache, evicting old entries if needed."""
+    _processed_messages.add(wa_message_id)
+    if len(_processed_messages) > MAX_DEDUP_SIZE:
+        to_remove = list(_processed_messages)[:MAX_DEDUP_SIZE // 2]
+        for item in to_remove:
+            _processed_messages.discard(item)
+
+
+async def _is_duplicate_message(wa_message_id: str, tenant_id: Optional[str]) -> bool:
+    """
+    Two-level deduplication: memory (fast) + database (persistent).
+    Survives server restarts via DB check on whatsapp_messages table.
+    """
+    # Level 1: in-memory cache
+    if wa_message_id in _processed_messages:
+        logger.debug(f"Duplicate (memory): {wa_message_id}")
+        return True
+
+    # Level 2: database check
+    if tenant_id:
+        try:
+            sb = get_supabase()
+            response = (
+                sb.table("whatsapp_messages")
+                .select("id")
+                .eq("wa_message_id", wa_message_id)
+                .limit(1)
+                .execute()
+            )
+            if response.data:
+                logger.debug(f"Duplicate (database): {wa_message_id}")
+                _add_to_dedup_cache(wa_message_id)
+                return True
+        except Exception as e:
+            logger.warning(f"Dedup DB check failed, relying on memory only: {e}")
+
+    return False
+
+
+# ─── Interactive message builders ─────────────────────────────
+
+
+def _build_availability_interactive(
+    slots: list[dict],
+) -> Optional[dict]:
+    """Build interactive message for availability slots."""
+    if not slots:
+        return None
+
+    if len(slots) <= 3:
+        buttons = []
+        for slot in slots:
+            staff_short = slot.get("staff_name", "")[:8]
+            title = f"{slot['time']} {staff_short}".strip()[:20]
+            buttons.append({
+                "id": f"slot_{slot['time']}_{slot.get('staff_id', '')}",
+                "title": title,
+            })
+        return {"type": "button", "buttons": buttons}
+
+    # List for 4-10 slots
+    rows = []
+    for slot in slots[:10]:
+        rows.append({
+            "id": f"slot_{slot['time']}_{slot.get('staff_id', '')}",
+            "title": f"{slot['time']} - {slot.get('staff_name', '')}".strip()[:24],
+            "description": f"Fino alle {slot.get('end_time', '')}"[:72],
+        })
+    return {
+        "type": "list",
+        "button_text": "Scegli orario",
+        "sections": [{"title": "Orari disponibili", "rows": rows}],
+    }
+
+
+def _build_services_interactive(
+    services: list[dict],
+) -> Optional[dict]:
+    """Build list message for services."""
+    if not services:
+        return None
+
+    rows = []
+    for svc in services[:10]:
+        price_str = f"\u20ac{float(svc['price']):.2f}" if svc.get("price") else ""
+        dur_str = f"{svc.get('duration_minutes', svc.get('duration_min', ''))} min"
+        rows.append({
+            "id": f"srv_{svc['id']}",
+            "title": svc["name"][:24],
+            "description": f"{dur_str} - {price_str}".strip(" -")[:72],
+        })
+    return {
+        "type": "list",
+        "button_text": "Vedi servizi",
+        "sections": [{"title": "I nostri servizi", "rows": rows}],
+    }
+
+
+def _build_appointments_interactive(
+    appointments: list[dict],
+) -> Optional[dict]:
+    """Build interactive message for appointment list."""
+    if not appointments:
+        return None
+
+    if len(appointments) <= 3:
+        buttons = []
+        for appt in appointments:
+            title = f"{appt.get('date', '')} {appt.get('time', '')}"[:20]
+            buttons.append({
+                "id": f"appt_{appt['id']}",
+                "title": title,
+            })
+        return {"type": "button", "buttons": buttons}
+
+    rows = []
+    for appt in appointments[:10]:
+        rows.append({
+            "id": f"appt_{appt['id']}",
+            "title": f"{appt.get('date', '')} {appt.get('time', '')}"[:24],
+            "description": f"{appt.get('service', '')} - {appt.get('staff', '')}"[:72],
+        })
+    return {
+        "type": "list",
+        "button_text": "I tuoi appuntamenti",
+        "sections": [{"title": "Appuntamenti", "rows": rows}],
+    }
+
+
+async def _send_reply(
+    phone_number_id: str,
+    access_token: str,
+    to: str,
+    reply: dict,
+) -> str:
+    """
+    Send the Gemini reply, choosing interactive format when appropriate.
+    Returns the text that was sent (for logging).
+    """
+    text = reply.get("text", "")
+    tool_ctx = reply.get("tool_context")
+
+    if not text:
+        return ""
+
+    interactive = None
+    if tool_ctx and tool_ctx.get("last_tool") and tool_ctx.get("last_result"):
+        last_tool = tool_ctx["last_tool"]
+        last_result = tool_ctx["last_result"]
+
+        try:
+            if last_tool == "check_availability" and last_result.get("slots"):
+                interactive = _build_availability_interactive(last_result["slots"])
+            elif last_tool == "get_services" and last_result.get("services"):
+                interactive = _build_services_interactive(last_result["services"])
+            elif last_tool == "get_my_appointments" and last_result.get("appointments"):
+                interactive = _build_appointments_interactive(last_result["appointments"])
+        except Exception as e:
+            logger.warning(f"Failed to build interactive message: {e}")
+
+    # Try sending interactive, fall back to text
+    if interactive:
+        try:
+            if interactive["type"] == "button":
+                result = await send_button_message(
+                    phone_number_id, access_token, to, text, interactive["buttons"]
+                )
+                if result is not None:
+                    return text
+            elif interactive["type"] == "list":
+                result = await send_list_message(
+                    phone_number_id, access_token, to, text,
+                    interactive["button_text"], interactive["sections"]
+                )
+                if result is not None:
+                    return text
+        except Exception as e:
+            logger.warning(f"Interactive send failed, falling back to text: {e}")
+
+    # Fallback: plain text
+    await send_text_message(phone_number_id, access_token, to, text)
+    return text
+
+
 # ─── Endpoints ────────────────────────────────────────────────
 
 
@@ -155,22 +356,16 @@ async def handle_webhook(request: Request):
         return Response(status_code=200)
 
     wa_message_id = msg["wa_message_id"]
-
-    # Deduplication
-    if wa_message_id in _processed_messages:
-        logger.debug(f"Duplicate message {wa_message_id}, skipping")
-        return Response(status_code=200)
-    _processed_messages.add(wa_message_id)
-    if len(_processed_messages) > MAX_DEDUP_SIZE:
-        to_remove = list(_processed_messages)[:MAX_DEDUP_SIZE // 2]
-        for item in to_remove:
-            _processed_messages.discard(item)
-
     phone_number_id = msg["phone_number_id"]
     sender = msg["sender"]
     sender_normalized = normalize_phone(sender)
     bot_phone = msg.get("display_phone_number", "")
     text = msg["text"]
+
+    # Quick in-memory dedup (fast path, before tenant resolution)
+    if wa_message_id in _processed_messages:
+        logger.debug(f"Duplicate message {wa_message_id}, skipping")
+        return Response(status_code=200)
 
     logger.info(f"Message from {sender}: {text[:80]}")
 
@@ -183,6 +378,18 @@ async def handle_webhook(request: Request):
 
         access_token = tenant.get("whatsapp_access_token", "")
         tenant_id = tenant["id"]
+
+        # Set Sentry context
+        if _SENTRY:
+            sentry_sdk.set_context("tenant", {
+                "id": tenant_id,
+                "name": tenant.get("name"),
+            })
+
+        # Persistent dedup (DB check — survives restarts)
+        if await _is_duplicate_message(wa_message_id, tenant_id):
+            return Response(status_code=200)
+        _add_to_dedup_cache(wa_message_id)
 
         # Mark as read — if 401, token may be stale: refresh from DB
         result = await mark_as_read(phone_number_id, access_token, wa_message_id)
@@ -200,6 +407,12 @@ async def handle_webhook(request: Request):
             whatsapp_phone=sender,
             contact_name=msg.get("contact_name"),
         )
+
+        if _SENTRY and client:
+            sentry_sdk.set_user({
+                "id": client.get("id"),
+                "username": client.get("name") or client.get("whatsapp_name"),
+            })
 
         # 3. Get or create conversation
         conversation = await get_or_create_conversation(
@@ -243,23 +456,26 @@ async def handle_webhook(request: Request):
             user_message=text,
         )
 
-        # 6. Send reply
+        # 6. Send reply (interactive or text)
         if reply:
-            await send_text_message(phone_number_id, access_token, sender, reply)
+            sent_text = await _send_reply(phone_number_id, access_token, sender, reply)
 
             # 7. Log bot reply
-            await log_message(
-                tenant_id=tenant_id,
-                client_id=client.get("id"),
-                direction="outbound",
-                from_number=bot_phone,
-                to_number=sender_normalized,
-                content=reply,
-                conversation_id=conversation.get("id"),
-            )
+            if sent_text:
+                await log_message(
+                    tenant_id=tenant_id,
+                    client_id=client.get("id"),
+                    direction="outbound",
+                    from_number=bot_phone,
+                    to_number=sender_normalized,
+                    content=sent_text,
+                    conversation_id=conversation.get("id"),
+                )
 
     except Exception as e:
         logger.exception(f"Error processing message: {e}")
+        if _SENTRY:
+            sentry_sdk.capture_exception(e)
         try:
             tenant = await get_tenant_by_phone_number_id(phone_number_id)
             if tenant:
@@ -269,7 +485,7 @@ async def handle_webhook(request: Request):
                     sender,
                     "Ci scusi, si è verificato un problema. La ricontatteremo al più presto.",
                 )
-        except Exception:
-            pass
+        except Exception as inner_e:
+            logger.error(f"Failed to send error message: {inner_e}")
 
     return Response(status_code=200)
