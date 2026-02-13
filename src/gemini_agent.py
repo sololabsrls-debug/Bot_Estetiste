@@ -515,8 +515,9 @@ async def process_message(
 
                 logger.info(f"Tool call: {fn_name}({fn_args})")
 
-                # Track check_availability for guardrail
-                if fn_name == "check_availability":
+                # Track appointment-related tools for guardrail
+                if fn_name in ("check_availability", "book_appointment",
+                               "modify_appointment", "get_my_appointments"):
                     availability_checked = True
 
                 tool_fn = _find_tool_function(fn_name)
