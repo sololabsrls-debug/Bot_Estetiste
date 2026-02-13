@@ -159,11 +159,12 @@ async def get_conversation_history(
     tenant_id: str,
     client_id: Optional[str] = None,
     client_phone: str = "",
-    limit: int = 20,
+    limit: int = 10,
 ) -> list[dict]:
     """
-    Load the last N messages for a client.
-    Since whatsapp_messages has no conversation_id, we query by tenant+client.
+    Load the last N messages for a client, with session gap detection.
+    If there's a gap of >2 hours between messages, only messages after
+    the gap are returned to avoid stale context pollution.
     Returns list of dicts with 'role' (user/assistant) and 'content'.
     """
     sb = get_supabase()
@@ -186,9 +187,26 @@ async def get_conversation_history(
 
         response = query.execute()
 
+        if not response.data:
+            return []
+
+        # Detect session gap: if >2h between consecutive messages,
+        # only keep messages from the most recent session
+        raw = response.data  # newest first
+        session_msgs = [raw[0]]
+        for i in range(1, len(raw)):
+            try:
+                newer = datetime.fromisoformat(raw[i - 1]["created_at"].replace("Z", "+00:00"))
+                older = datetime.fromisoformat(raw[i]["created_at"].replace("Z", "+00:00"))
+                if (newer - older) > timedelta(hours=2):
+                    break  # Gap found, stop including older messages
+            except (ValueError, TypeError):
+                pass
+            session_msgs.append(raw[i])
+
         # Convert to role-based format and reverse to chronological order
         messages = []
-        for msg in reversed(response.data):
+        for msg in reversed(session_msgs):
             role = "user" if msg["direction"] == "inbound" else "assistant"
             messages.append({
                 "role": role,

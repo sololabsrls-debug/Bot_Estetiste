@@ -23,14 +23,27 @@ logger = logging.getLogger("BOT.gemini")
 MAX_TOOL_ROUNDS = 5
 
 
-def _seems_to_confirm_availability(text: str) -> bool:
+def _seems_to_confirm_availability(response_text: str, user_message: str) -> bool:
     """
     Detect if Gemini's response appears to confirm a time slot's availability.
     Used as a guardrail: if check_availability was NOT called, this means
     Gemini is hallucinating availability from conversation memory.
+
+    Returns False if the user is clearly asking about something else
+    (e.g., their appointments, cancellation, general info).
     """
-    text_lower = text.lower()
-    has_time = bool(re.search(r'\d{1,2}:\d{2}', text))
+    # Don't fire if user is asking about their appointments or other topics
+    user_lower = user_message.lower()
+    non_availability_keywords = [
+        'miei appuntamenti', 'i miei', 'in programma', 'annulla',
+        'cancella', 'ciao', 'salve', 'buongiorno', 'servizi',
+        'informazioni', 'orari del centro', 'dove siete',
+    ]
+    if any(kw in user_lower for kw in non_availability_keywords):
+        return False
+
+    text_lower = response_text.lower()
+    has_time = bool(re.search(r'\d{1,2}:\d{2}', response_text))
     confirm_keywords = [
         'disponibil', 'libero', 'conferm', 'prenot',
         'va bene', 'perfetto', 'ottimo',
@@ -456,7 +469,7 @@ async def process_message(
                 if (
                     not availability_checked
                     and round_num < MAX_TOOL_ROUNDS - 1
-                    and _seems_to_confirm_availability(text)
+                    and _seems_to_confirm_availability(text, user_message)
                 ):
                     logger.warning(
                         "Guardrail triggered: Gemini confirmed availability without "
