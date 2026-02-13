@@ -274,11 +274,11 @@ def start_scheduler():
 
     _scheduler = BackgroundScheduler(timezone="Europe/Rome")
 
-    # Morning confirmation: 08:00 Rome time, every day
+    # Morning confirmation: 09:00 Rome time, every day
     _scheduler.add_job(
         _job_morning_confirmation,
         "cron",
-        hour=8,
+        hour=9,
         minute=0,
         id="morning_confirmation",
         name="Morning confirmation for pending appointments",
@@ -294,7 +294,7 @@ def start_scheduler():
     )
 
     _scheduler.start()
-    logger.info("Scheduler started with 2 jobs: morning_confirmation (08:00), reminder_1h (every 5 min)")
+    logger.info("Scheduler started with 2 jobs: morning_confirmation (09:00), reminder_1h (every 5 min)")
 
 
 def stop_scheduler():
