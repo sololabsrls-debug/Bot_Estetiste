@@ -167,6 +167,8 @@ ALTRE REGOLE:
 8. Orari in formato 24h (14:30, non 2:30 PM).
 9. Per info dettagliate su un servizio, usa get_service_info.
 10. Per cancellare/modificare appuntamenti, usa prima get_my_appointments poi cancel_appointment o modify_appointment.
+11. Gli appuntamenti prenotati via WhatsApp hanno stato "in attesa di conferma" (pending). Il cliente riceverà un messaggio la mattina del giorno PRIMA per confermare, cancellare o spostare. Comunica questo dopo ogni prenotazione.
+12. Se il cliente vuole confermare un appuntamento pending, usa confirm_appointment. Se vuole cancellare, usa cancel_appointment. Se vuole spostare, usa modify_appointment.
 """
 
 
@@ -302,6 +304,19 @@ def _get_tool_declarations() -> list[types.FunctionDeclaration]:
                     "appointment_id": {
                         "type": "STRING",
                         "description": "ID dell'appuntamento da cancellare",
+                    },
+                },
+                "required": ["appointment_id"],
+            },
+        },
+        "confirm_appointment": {
+            "description": "Conferma un appuntamento in stato 'pending'. Cambia lo stato a 'confirmed'.",
+            "parameters": {
+                "type": "OBJECT",
+                "properties": {
+                    "appointment_id": {
+                        "type": "STRING",
+                        "description": "ID dell'appuntamento da confermare",
                     },
                 },
                 "required": ["appointment_id"],

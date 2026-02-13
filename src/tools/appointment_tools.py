@@ -27,6 +27,8 @@ def _build_booking_result(appt_id, service, start_dt, time_str, duration, staff_
         "duration_minutes": duration,
         "staff_name": staff_name,
         "price": float(service["price"]) if service.get("price") else None,
+        "status": "pending",
+        "message": "L'appuntamento è in attesa di conferma. Il cliente riceverà un messaggio il giorno prima per confermare.",
     }
 
 
@@ -126,7 +128,7 @@ async def book_appointment(
             "service_id": service_id,
             "start_at": start_dt.isoformat(),
             "end_at": end_dt.isoformat(),
-            "status": "confirmed",
+            "status": "pending",
             "source": "whatsapp",
             "notes": "Prenotato via WhatsApp Bot",
         }
@@ -252,6 +254,7 @@ async def modify_appointment(
                 "p_tenant_id": tenant_id,
                 "p_new_start_at": new_start.isoformat(),
                 "p_new_end_at": new_end.isoformat(),
+                "p_source": "whatsapp",
             }
         ).execute()
 
@@ -303,7 +306,7 @@ async def modify_appointment(
         sb.table("appointments").update({
             "start_at": new_start.isoformat(),
             "end_at": new_end.isoformat(),
-            "status": "confirmed",
+            "status": "pending",
             "notes": f"{appt.get('notes', '') or ''}\nSpostato via WhatsApp il {datetime.now().strftime('%d/%m/%Y %H:%M')}".strip(),
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }).eq("id", appointment_id).execute()
@@ -404,3 +407,69 @@ async def cancel_appointment(
     except Exception as e:
         logger.error(f"cancel_appointment error: {e}")
         return {"error": "Errore durante la cancellazione. Riprova."}
+
+
+async def confirm_appointment(
+    appointment_id: str,
+    *,
+    tenant_id: str,
+    client_id: Optional[str] = None,
+    **kwargs,
+) -> dict:
+    """Confirm a pending appointment (set status to confirmed)."""
+    if not client_id:
+        return {"error": "Cliente non identificato."}
+
+    sb = get_supabase()
+
+    try:
+        appt_resp = (
+            sb.table("appointments")
+            .select("id, status, notes, service:services(name)")
+            .eq("id", appointment_id)
+            .eq("client_id", client_id)
+            .eq("tenant_id", tenant_id)
+            .execute()
+        )
+
+        if not appt_resp.data:
+            return {"error": "Appuntamento non trovato o non appartiene a te."}
+
+        appt = appt_resp.data[0]
+
+        if appt["status"] != "pending":
+            return {"error": f"L'appuntamento è già {appt['status']}, non può essere confermato."}
+
+    except Exception as e:
+        return {"error": f"Errore verifica appuntamento: {e}"}
+
+    try:
+        sb.table("appointments").update({
+            "status": "confirmed",
+            "notes": f"{appt.get('notes', '') or ''}\n[confirmed_by_client:{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')}]".strip(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }).eq("id", appointment_id).execute()
+
+        try:
+            sb.table("audit_logs").insert({
+                "tenant_id": tenant_id,
+                "action": "appointment_confirmed_by_client",
+                "target": appointment_id,
+                "meta": {"source": "whatsapp"},
+            }).execute()
+        except Exception as e:
+            logger.warning(f"Audit log failed: {e}")
+
+        service_name = appt.get("service", {}).get("name", "") if appt.get("service") else ""
+        logger.info(f"Appointment {appointment_id} confirmed by client")
+
+        return {
+            "success": True,
+            "appointment_id": appointment_id,
+            "service": service_name,
+            "message": "Appuntamento confermato con successo.",
+        }
+
+    except Exception as e:
+        logger.error(f"confirm_appointment error: {e}")
+        return {"error": "Errore durante la conferma. Riprova."}

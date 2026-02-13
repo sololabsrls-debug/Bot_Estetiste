@@ -7,6 +7,7 @@ from src.tools.appointment_tools import (
     get_my_appointments,
     modify_appointment,
     cancel_appointment,
+    confirm_appointment,
 )
 from src.tools.client_tools import update_client_name
 
@@ -20,5 +21,6 @@ ALL_TOOLS = [
     get_my_appointments,
     modify_appointment,
     cancel_appointment,
+    confirm_appointment,
     update_client_name,
 ]

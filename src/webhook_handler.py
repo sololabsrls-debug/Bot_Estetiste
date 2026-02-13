@@ -23,7 +23,7 @@ from src.whatsapp_api import (
     mark_as_read,
 )
 from src.supabase_client import get_supabase
-from src.utils import normalize_phone
+from src.utils import normalize_phone, format_datetime_italian
 
 logger = logging.getLogger("BOT.webhook")
 router = APIRouter()
@@ -165,6 +165,123 @@ async def _is_duplicate_message(wa_message_id: str, tenant_id: Optional[str]) ->
             logger.warning(f"Dedup DB check failed, relying on memory only: {e}")
 
     return False
+
+
+# ─── Appointment button handler ──────────────────────────────
+
+
+async def _handle_appointment_button(
+    interactive: dict,
+    tenant: dict,
+    client: dict,
+) -> Optional[str]:
+    """
+    Handle confirmation/cancellation/modify button clicks from morning confirmation.
+    Returns response text if handled, None if not an appointment button.
+    """
+    button_id = interactive.get("id", "")
+
+    if not any(button_id.startswith(p) for p in ("confirm_appt_", "cancel_appt_", "modify_appt_")):
+        return None
+
+    # Extract appointment UUID: "confirm_appt_<uuid>" → "<uuid>"
+    if "_appt_" not in button_id:
+        return None
+    appt_id = button_id.split("_appt_", 1)[1]
+    action = button_id.split("_appt_", 1)[0]  # "confirm", "cancel", "modify"
+
+    sb = get_supabase()
+    tenant_id = tenant["id"]
+    client_id = client.get("id")
+
+    # Fetch appointment and verify ownership
+    try:
+        appt_resp = (
+            sb.table("appointments")
+            .select("id, status, start_at, notes, service:services(name), staff:staff(name)")
+            .eq("id", appt_id)
+            .eq("tenant_id", tenant_id)
+            .eq("client_id", client_id)
+            .execute()
+        )
+    except Exception as e:
+        logger.error(f"Error fetching appointment {appt_id}: {e}")
+        return "Si è verificato un errore. Riprova o scrivi un messaggio per assistenza."
+
+    if not appt_resp.data:
+        return "Appuntamento non trovato. Potrebbe essere già stato modificato o cancellato."
+
+    appt = appt_resp.data[0]
+    service_name = appt.get("service", {}).get("name", "appuntamento") if appt.get("service") else "appuntamento"
+
+    from datetime import datetime as dt, timezone as tz
+
+    if action == "confirm":
+        if appt["status"] != "pending":
+            return f"L'appuntamento è già {appt['status']}."
+        try:
+            now_str = dt.now(tz.utc).strftime("%Y-%m-%d %H:%M")
+            notes = appt.get("notes") or ""
+            sb.table("appointments").update({
+                "status": "confirmed",
+                "notes": f"{notes}\n[confirmed_by_client:{now_str}]".strip(),
+                "updated_at": dt.now(tz.utc).isoformat(),
+            }).eq("id", appt_id).execute()
+            try:
+                sb.table("audit_logs").insert({
+                    "tenant_id": tenant_id,
+                    "action": "appointment_confirmed_by_client",
+                    "target": appt_id,
+                    "meta": {"source": "whatsapp_button"},
+                }).execute()
+            except Exception:
+                pass
+            return (
+                f"Perfetto! Il tuo appuntamento per *{service_name}* è confermato.\n"
+                f"Ti aspettiamo!"
+            )
+        except Exception as e:
+            logger.error(f"Error confirming appointment {appt_id}: {e}")
+            return "Errore durante la conferma. Riprova o scrivi un messaggio."
+
+    elif action == "cancel":
+        if appt["status"] in ("canceled", "completed"):
+            return f"L'appuntamento è già {appt['status']}."
+        try:
+            now_str = dt.now(tz.utc).strftime("%Y-%m-%d %H:%M")
+            notes = appt.get("notes") or ""
+            sb.table("appointments").update({
+                "status": "canceled",
+                "notes": f"{notes}\n[canceled_by_client:{now_str}]".strip(),
+                "updated_at": dt.now(tz.utc).isoformat(),
+            }).eq("id", appt_id).execute()
+            try:
+                sb.table("audit_logs").insert({
+                    "tenant_id": tenant_id,
+                    "action": "appointment_canceled_by_client",
+                    "target": appt_id,
+                    "meta": {"source": "whatsapp_button"},
+                }).execute()
+            except Exception:
+                pass
+            return (
+                f"Il tuo appuntamento per *{service_name}* è stato cancellato.\n"
+                f"Se vuoi prenotare un nuovo appuntamento, scrivici pure!"
+            )
+        except Exception as e:
+            logger.error(f"Error canceling appointment {appt_id}: {e}")
+            return "Errore durante la cancellazione. Riprova o scrivi un messaggio."
+
+    elif action == "modify":
+        start_at = dt.fromisoformat(appt["start_at"].replace("Z", "+00:00"))
+        time_str = format_datetime_italian(start_at)
+        return (
+            f"Vuoi spostare il tuo appuntamento per *{service_name}* "
+            f"previsto per *{time_str}*.\n\n"
+            f"Scrivimi la nuova data e orario che preferisci e verificherò la disponibilità!"
+        )
+
+    return None
 
 
 # ─── Interactive message builders ─────────────────────────────
@@ -447,6 +564,26 @@ async def handle_webhook(request: Request):
             wa_message_id=wa_message_id,
             conversation_id=conversation.get("id"),
         )
+
+        # 4b. Handle appointment confirmation/cancel/modify buttons directly
+        if msg.get("interactive") and msg["interactive"].get("type") == "button_reply":
+            button_response = await _handle_appointment_button(
+                interactive=msg["interactive"],
+                tenant=tenant,
+                client=client,
+            )
+            if button_response:
+                await send_text_message(phone_number_id, access_token, sender, button_response)
+                await log_message(
+                    tenant_id=tenant_id,
+                    client_id=client.get("id"),
+                    direction="outbound",
+                    from_number=bot_phone,
+                    to_number=sender_normalized,
+                    content=button_response,
+                    conversation_id=conversation.get("id"),
+                )
+                return Response(status_code=200)
 
         # 5. Process with Gemini
         reply = await process_message(
