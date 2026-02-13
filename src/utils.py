@@ -51,11 +51,12 @@ def normalize_phone(phone: str) -> str:
 
 def format_date_italian(d: date | None = None) -> str:
     """
-    Format a date in Italian.
+    Format a date in Italian, always using Europe/Rome timezone.
     Example: 'giovedì 15 maggio 2025'
     """
     if d is None:
-        d = date.today()
+        import pytz
+        d = datetime.now(pytz.timezone("Europe/Rome")).date()
 
     giorno = GIORNI[d.weekday()]
     mese = MESI[d.month]
