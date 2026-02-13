@@ -7,6 +7,7 @@ and runs the function-calling loop (max 5 iterations).
 import json
 import logging
 import os
+import re
 from typing import Optional
 
 from google import genai
@@ -20,6 +21,22 @@ from src.utils import format_date_italian
 logger = logging.getLogger("BOT.gemini")
 
 MAX_TOOL_ROUNDS = 5
+
+
+def _seems_to_confirm_availability(text: str) -> bool:
+    """
+    Detect if Gemini's response appears to confirm a time slot's availability.
+    Used as a guardrail: if check_availability was NOT called, this means
+    Gemini is hallucinating availability from conversation memory.
+    """
+    text_lower = text.lower()
+    has_time = bool(re.search(r'\d{1,2}:\d{2}', text))
+    confirm_keywords = [
+        'disponibil', 'libero', 'conferm', 'prenot',
+        'va bene', 'perfetto', 'ottimo',
+    ]
+    has_confirm = any(kw in text_lower for kw in confirm_keywords)
+    return has_time and has_confirm
 
 
 def _fetch_tenant_services(tenant_id: str) -> list[dict]:
@@ -388,6 +405,7 @@ async def process_message(
     # Track last tool call for interactive message routing
     last_tool_name = None
     last_tool_result = None
+    availability_checked = False  # Guardrail: track if check_availability was called
 
     try:
         # Function calling loop
@@ -418,6 +436,38 @@ async def process_message(
                 text = "\n".join(text_parts) if text_parts else None
                 if text is None:
                     return None
+
+                # ── Guardrail: block availability confirmation without tool call ──
+                if (
+                    not availability_checked
+                    and round_num < MAX_TOOL_ROUNDS - 1
+                    and _seems_to_confirm_availability(text)
+                ):
+                    logger.warning(
+                        "Guardrail triggered: Gemini confirmed availability without "
+                        "calling check_availability. Injecting correction (round %d).",
+                        round_num,
+                    )
+                    # Feed the model's (bad) response back and demand a tool call
+                    contents.append(candidate.content)
+                    contents.append(
+                        types.Content(
+                            role="user",
+                            parts=[types.Part.from_text(
+                                text=(
+                                    "[ERRORE DI SISTEMA] La tua risposta è stata BLOCCATA "
+                                    "perché hai confermato un orario SENZA chiamare "
+                                    "check_availability(). Questo è VIETATO.\n"
+                                    "DEVI chiamare check_availability() ADESSO con la data "
+                                    "richiesta dal cliente. NON scrivere testo, chiama SOLO "
+                                    "il tool check_availability."
+                                ),
+                            )],
+                        )
+                    )
+                    continue  # Re-generate with the correction
+                # ── Fine guardrail ───────────────────────────────────────────
+
                 return {
                     "text": text,
                     "tool_context": {
@@ -436,6 +486,10 @@ async def process_message(
                 fn_args = dict(fc.args) if fc.args else {}
 
                 logger.info(f"Tool call: {fn_name}({fn_args})")
+
+                # Track check_availability for guardrail
+                if fn_name == "check_availability":
+                    availability_checked = True
 
                 tool_fn = _find_tool_function(fn_name)
                 if tool_fn:
