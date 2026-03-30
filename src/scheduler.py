@@ -85,7 +85,7 @@ async def _send_morning_confirmations():
             sb.table("appointments")
             .select(
                 "id, start_at, status, notes, "
-                "client:clients(id, whatsapp_phone, name, first_name), "
+                "client:clients(id, whatsapp_phone, name, first_name, bot_enabled, reminder_morning_enabled), "
                 "service:services(name), "
                 "staff:staff(name), "
                 "tenant:tenants(id, name, whatsapp_phone_number_id, whatsapp_access_token)"
@@ -111,6 +111,10 @@ async def _send_morning_confirmations():
         if not client or not tenant or not client.get("whatsapp_phone"):
             continue
 
+        # Skip if morning reminder disabled for this client
+        if not client.get("reminder_morning_enabled", True):
+            continue
+
         phone_number_id = tenant.get("whatsapp_phone_number_id")
         access_token = tenant.get("whatsapp_access_token")
         if not phone_number_id or not access_token:
@@ -126,53 +130,70 @@ async def _send_morning_confirmations():
         appt_id = appt["id"]
         time_str = format_datetime_italian(start_at)
 
-        body = (
-            f"Ciao {client_name}!\n\n"
-            f"Ti ricordiamo il tuo appuntamento per "
-            f"*{service_name}* previsto per domani, *{time_str}*.\n\n"
-            f"Puoi confermare, cancellare o spostare:"
-        )
-
-        buttons = [
-            {"id": f"confirm_appt_{appt_id}", "title": "Conferma"},
-            {"id": f"cancel_appt_{appt_id}", "title": "Cancella"},
-            {"id": f"modify_appt_{appt_id}", "title": "Sposta"},
-        ]
-
         sent = False
+        client_bot_enabled = client.get("bot_enabled", False)
 
-        # Primary: button message (within 24h conversation window)
-        try:
-            result = await send_button_message(
-                phone_number_id, access_token, to_phone, body, buttons
+        if client_bot_enabled:
+            # Bot attivo: invia messaggio interattivo con bottoni
+            body = (
+                f"Ciao {client_name}!\n\n"
+                f"Ti ricordiamo il tuo appuntamento per "
+                f"*{service_name}* previsto per domani, *{time_str}*.\n\n"
+                f"Puoi confermare, cancellare o spostare:"
             )
-            if result is not None:
-                sent = True
-        except Exception as e:
-            logger.warning(f"Button message failed for {appt_id}, trying template: {e}")
+            buttons = [
+                {"id": f"confirm_appt_{appt_id}", "title": "Conferma"},
+                {"id": f"cancel_appt_{appt_id}", "title": "Cancella"},
+                {"id": f"modify_appt_{appt_id}", "title": "Sposta"},
+            ]
 
-        # Fallback: template message (outside 24h window)
-        if not sent:
+            # Primary: button message (within 24h conversation window)
             try:
-                await send_template_message(
-                    phone_number_id=phone_number_id,
-                    access_token=access_token,
-                    to=to_phone,
-                    template_name="appointment_confirm_morning",
-                    components=[
-                        {
-                            "type": "body",
-                            "parameters": [
-                                {"type": "text", "text": client_name},
-                                {"type": "text", "text": service_name},
-                                {"type": "text", "text": time_str},
-                            ],
-                        }
-                    ],
+                result = await send_button_message(
+                    phone_number_id, access_token, to_phone, body, buttons
                 )
+                if result is not None:
+                    sent = True
+            except Exception as e:
+                logger.warning(f"Button message failed for {appt_id}, trying template: {e}")
+
+            # Fallback: template message (outside 24h window)
+            if not sent:
+                try:
+                    await send_template_message(
+                        phone_number_id=phone_number_id,
+                        access_token=access_token,
+                        to=to_phone,
+                        template_name="appointment_confirm_morning",
+                        components=[
+                            {
+                                "type": "body",
+                                "parameters": [
+                                    {"type": "text", "text": client_name},
+                                    {"type": "text", "text": service_name},
+                                    {"type": "text", "text": time_str},
+                                ],
+                            }
+                        ],
+                    )
+                    sent = True
+                except Exception as e:
+                    logger.error(f"Template message also failed for {appt_id}: {e}")
+                    if _SENTRY:
+                        sentry_sdk.capture_exception(e)
+
+        else:
+            # Bot non attivo: invia testo semplice senza bottoni
+            body = (
+                f"Ciao {client_name}!\n\n"
+                f"Ti ricordiamo il tuo appuntamento per "
+                f"*{service_name}* domani, *{time_str}*."
+            )
+            try:
+                await send_text_message(phone_number_id, access_token, to_phone, body)
                 sent = True
             except Exception as e:
-                logger.error(f"Template message also failed for {appt_id}: {e}")
+                logger.error(f"Text reminder failed for {appt_id}: {e}")
                 if _SENTRY:
                     sentry_sdk.capture_exception(e)
 
