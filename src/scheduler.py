@@ -60,12 +60,10 @@ def _job_morning_confirmation():
 
 async def _send_morning_confirmations():
     """
-    Find all 'pending' appointments scheduled for TOMORROW (Europe/Rome)
-    and send an interactive confirmation request with 3 buttons:
-    Conferma / Cancella / Sposta.
-
-    Primary: send_button_message (works within 24h conversation window).
-    Fallback: send_template_message (works outside 24h window).
+    Find all 'pending' appointments scheduled for TOMORROW (Europe/Rome) and send confirmation.
+    Skips clients with reminder_morning_enabled=False.
+    For bot_enabled=True: interactive button message with template fallback.
+    For bot_enabled=False: simple text reminder (subject to 24h message window limitation).
     """
     now_rome = datetime.now(ROME_TZ)
     tomorrow = (now_rome + timedelta(days=1)).date()
@@ -190,8 +188,9 @@ async def _send_morning_confirmations():
                 f"*{service_name}* domani, *{time_str}*."
             )
             try:
-                await send_text_message(phone_number_id, access_token, to_phone, body)
-                sent = True
+                result = await send_text_message(phone_number_id, access_token, to_phone, body)
+                if result is not None:
+                    sent = True
             except Exception as e:
                 logger.error(f"Text reminder failed for {appt_id}: {e}")
                 if _SENTRY:
