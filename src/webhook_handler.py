@@ -532,7 +532,9 @@ async def handle_webhook(request: Request):
             })
 
         # If bot is disabled for this client: log message and stop, no reply
-        if not client.get("bot_enabled"):
+        # Only applies when client was successfully fetched from DB (id is set)
+        if client.get("id") and not client.get("bot_enabled"):
+            logger.info(f"bot_enabled=False for client {client.get('id')}, skipping reply")
             conv = await get_or_create_conversation(
                 tenant_id=tenant_id,
                 client_id=client.get("id"),
