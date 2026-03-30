@@ -531,6 +531,25 @@ async def handle_webhook(request: Request):
                 "username": client.get("name") or client.get("whatsapp_name"),
             })
 
+        # If bot is disabled for this client: log message and stop, no reply
+        if not client.get("bot_enabled"):
+            conv = await get_or_create_conversation(
+                tenant_id=tenant_id,
+                client_id=client.get("id"),
+                client_phone=sender_normalized,
+            )
+            await log_message(
+                tenant_id=tenant_id,
+                client_id=client.get("id"),
+                direction="inbound",
+                from_number=sender_normalized,
+                to_number=bot_phone,
+                content=text,
+                wa_message_id=wa_message_id,
+                conversation_id=conv.get("id"),
+            )
+            return Response(status_code=200)
+
         # 3. Get or create conversation
         conversation = await get_or_create_conversation(
             tenant_id=tenant_id,
