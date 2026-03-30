@@ -227,7 +227,7 @@ async def _send_reminder_1h():
             sb.table("appointments")
             .select(
                 "id, start_at, status, notes, "
-                "client:clients(id, whatsapp_phone, name, first_name), "
+                "client:clients(id, whatsapp_phone, name, first_name, reminder_1h_enabled), "
                 "service:services(name), "
                 "staff:staff(name), "
                 "tenant:tenants(id, name, whatsapp_phone_number_id, whatsapp_access_token)"
@@ -249,6 +249,10 @@ async def _send_reminder_1h():
         client = appt.get("client")
         tenant = appt.get("tenant")
         if not client or not tenant or not client.get("whatsapp_phone"):
+            continue
+
+        # Skip if 1h reminder disabled for this client
+        if not client.get("reminder_1h_enabled", True):
             continue
 
         phone_number_id = tenant.get("whatsapp_phone_number_id")
