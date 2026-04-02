@@ -16,6 +16,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from src.supabase_client import get_supabase
 from src.whatsapp_api import send_template_message, send_text_message, send_button_message
 from src.utils import format_datetime_italian
+from src.whatsapp_unofficial import send_message as send_unofficial_message
 
 logger = logging.getLogger("BOT.scheduler")
 
@@ -86,7 +87,7 @@ async def _send_morning_confirmations():
                 "client:clients(id, whatsapp_phone, name, first_name, bot_enabled, reminder_morning_enabled), "
                 "service:services(name), "
                 "staff:staff(name), "
-                "tenant:tenants(id, name, whatsapp_phone_number_id, whatsapp_access_token)"
+                "tenant:tenants(id, name, whatsapp_phone_number_id, whatsapp_access_token, wa_mode)"
             )
             .eq("status", "pending")
             .gte("start_at", tomorrow_start.isoformat())
@@ -116,6 +117,10 @@ async def _send_morning_confirmations():
         phone_number_id = tenant.get("whatsapp_phone_number_id")
         access_token = tenant.get("whatsapp_access_token")
         if not phone_number_id or not access_token:
+            continue
+
+        # Salta tenant in modalità unofficial (gestiti da _job_reminder_day_before)
+        if tenant.get("wa_mode") == "unofficial":
             continue
 
         to_phone = client["whatsapp_phone"]
@@ -287,6 +292,98 @@ async def _send_reminder_1h():
                 sentry_sdk.capture_exception(e)
 
 
+# ─── Job: Reminder giorno prima (tenant unofficial) ──────────────
+
+
+def _job_reminder_day_before():
+    """Send day-before reminder for unofficial WA tenants."""
+    try:
+        _run_async(_send_reminder_day_before())
+    except Exception as e:
+        logger.exception(f"Error in reminder_day_before job: {e}")
+        if _SENTRY:
+            sentry_sdk.capture_exception(e)
+
+
+async def _send_reminder_day_before():
+    """
+    Trova appuntamenti con start_at tra 23h55 e 24h05 da adesso
+    per tenant con wa_mode='unofficial'.
+    Invia promemoria via microservizio whatsapp-web.js.
+    Timing: se appuntamento è martedì alle 11:00, il promemoria
+    viene inviato lunedì alle 11:00 (±5 min).
+    """
+    sb = get_supabase()
+    now = datetime.now(timezone.utc)
+    target_start = now + timedelta(hours=23, minutes=55)
+    target_end = now + timedelta(hours=24, minutes=5)
+
+    try:
+        response = (
+            sb.table("appointments")
+            .select(
+                "id, start_at, notes, "
+                "client:clients(id, whatsapp_phone, name, first_name, reminder_morning_enabled), "
+                "service:services(name), "
+                "tenant:tenants(id, wa_mode)"
+            )
+            .in_("status", ["pending", "confirmed"])
+            .gte("start_at", target_start.isoformat())
+            .lt("start_at", target_end.isoformat())
+            .execute()
+        )
+    except Exception as e:
+        logger.error(f"Reminder day before query error: {e}")
+        return
+
+    now_str = now.strftime("%Y-%m-%d %H:%M")
+
+    for appt in response.data:
+        notes = appt.get("notes") or ""
+        if "reminder_day_before" in notes:
+            continue
+
+        client = appt.get("client")
+        tenant = appt.get("tenant")
+        if not client or not tenant:
+            continue
+        if tenant.get("wa_mode") != "unofficial":
+            continue
+        if not client.get("reminder_morning_enabled", True):
+            continue
+        if not client.get("whatsapp_phone"):
+            continue
+
+        tenant_id = tenant["id"]
+        phone = client["whatsapp_phone"]
+        client_name = client.get("name") or client.get("first_name") or ""
+        service_name = (
+            appt.get("service", {}).get("name", "Appuntamento")
+            if appt.get("service") else "Appuntamento"
+        )
+        start_at = datetime.fromisoformat(appt["start_at"].replace("Z", "+00:00"))
+        time_str = start_at.astimezone(ROME_TZ).strftime("%H:%M")
+
+        message = (
+            f"Ciao {client_name}!\n\n"
+            f"Ti ricordiamo il tuo appuntamento per *{service_name}* "
+            f"domani alle *{time_str}*.\n\n"
+            f"Ti aspettiamo! 😊"
+        )
+
+        success = await send_unofficial_message(tenant_id, phone, message)
+        if success:
+            new_notes = f"{notes}\n[reminder_day_before:{now_str}]".strip()
+            sb.table("appointments").update({"notes": new_notes}).eq("id", appt["id"]).execute()
+            logger.info(f"Day-before reminder sent for appointment {appt['id']}")
+        else:
+            logger.error(f"Failed to send day-before reminder for appointment {appt['id']}")
+            if _SENTRY:
+                sentry_sdk.capture_exception(
+                    Exception(f"WA unofficial send failed for appt {appt['id']}")
+                )
+
+
 # ─── Scheduler lifecycle ─────────────────────────────────────────
 
 
@@ -317,8 +414,17 @@ def start_scheduler():
         name="1h appointment reminder",
     )
 
+    # Day-before reminder (unofficial WA tenants, ogni 5 minuti)
+    _scheduler.add_job(
+        _job_reminder_day_before,
+        "interval",
+        minutes=5,
+        id="reminder_day_before",
+        name="Day-before reminder (unofficial WA)",
+    )
+
     _scheduler.start()
-    logger.info("Scheduler started with 2 jobs: morning_confirmation (09:00), reminder_1h (every 5 min)")
+    logger.info("Scheduler started with 3 jobs: morning_confirmation (09:00), reminder_1h (every 5 min), reminder_day_before (every 5 min)")
 
 
 def stop_scheduler():
