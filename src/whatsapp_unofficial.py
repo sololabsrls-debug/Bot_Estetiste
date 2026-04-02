@@ -29,7 +29,7 @@ async def send_message(tenant_id: str, phone: str, message: str) -> bool:
         return False
 
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.post(
                 f"{_WA_SERVICE_URL}/send",
                 json={"tenantId": tenant_id, "phone": phone, "message": message},

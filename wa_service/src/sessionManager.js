@@ -16,13 +16,18 @@ const mongoose = require('mongoose');
 // Map<tenantId, { client, status, qrCode }>
 const sessions = new Map();
 
-let mongooseConnected = false;
-
 async function ensureMongoose() {
-  if (!mongooseConnected) {
+  const state = mongoose.connection.readyState;
+  // 0 = disconnected, 1 = connected, 2 = connecting, 3 = disconnecting
+  if (state === 0) {
     await mongoose.connect(process.env.MONGODB_URI);
-    mongooseConnected = true;
     console.log('MongoDB connected');
+  } else if (state === 2) {
+    // Already connecting — wait for it
+    await new Promise((resolve, reject) => {
+      mongoose.connection.once('connected', resolve);
+      mongoose.connection.once('error', reject);
+    });
   }
 }
 

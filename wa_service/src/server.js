@@ -18,6 +18,11 @@ const { sendWithAntibanMeasures } = require('./antibanUtils');
 const app = express();
 app.use(express.json());
 
+// ── Health check (no auth required) ──────────────────────────────
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok' });
+});
+
 // ── Auth middleware ────────────────────────────────────────────────
 app.use((req, res, next) => {
   const apiKey = req.headers['x-api-key'];
