@@ -27,10 +27,14 @@ app.get('/health', (req, res) => {
 });
 
 // ── Setup: public status polling for Lovable frontend (no auth) ──
-app.get('/setup/:tenantId/status', (req, res) => {
-  const { sessions } = require('./sessionManager');
-  const session = sessions.get(req.params.tenantId);
-  res.json({ status: session ? session.status : 'not_started' });
+// Also triggers session creation if not yet started.
+app.get('/setup/:tenantId/status', async (req, res) => {
+  try {
+    const session = await getOrCreateSession(req.params.tenantId);
+    res.json({ status: session.status });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ── Setup: QR pubblico per Lovable (no auth) ─────────────────────
