@@ -1,29 +1,35 @@
 /**
- * Manages one whatsapp-web.js Client session per tenantId.
- * Sessions are persisted to MongoDB Atlas via RemoteAuth + wwebjs-mongo.
+ * Manages one Baileys WA socket per tenantId.
+ * Session credentials are persisted to MongoDB via mongoAuthState.
  *
  * Session states:
- *   'initializing' - client created, waiting for QR or auto-reconnect
- *   'qr_pending'   - QR code available, waiting for phone scan
- *   'connected'    - session authenticated and ready
- *   'disconnected' - session lost, needs new QR
+ *   'initializing' - socket created, attempting to restore session or waiting for QR
+ *   'qr_pending'   - QR code ready, waiting for phone scan
+ *   'connected'    - authenticated and open
+ *   'disconnected' - connection lost (auto-reconnects unless logged out)
  */
 
-const { Client, RemoteAuth } = require('whatsapp-web.js');
-const NormalizedMongoStore = require('./normalizedMongoStore');
+const { default: makeWASocket, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
 const mongoose = require('mongoose');
+const { useMongoAuthState } = require('./mongoAuthState');
 
 // Map<tenantId, { client, status, qrCode }>
 const sessions = new Map();
 
+// Silent logger — Baileys is very verbose by default
+const SILENT_LOGGER = {
+  level: 'silent',
+  trace: () => {}, debug: () => {}, info: () => {},
+  warn:  () => {}, error: () => {}, fatal: () => {},
+  child: () => SILENT_LOGGER,
+};
+
 async function ensureMongoose() {
   const state = mongoose.connection.readyState;
-  // 0 = disconnected, 1 = connected, 2 = connecting, 3 = disconnecting
   if (state === 0) {
     await mongoose.connect(process.env.MONGODB_URI);
     console.log('MongoDB connected');
   } else if (state === 2) {
-    // Already connecting — wait for it
     await new Promise((resolve, reject) => {
       mongoose.connection.once('connected', resolve);
       mongoose.connection.once('error', reject);
@@ -31,85 +37,62 @@ async function ensureMongoose() {
   }
 }
 
-/**
- * Returns the session for tenantId, creating it if it doesn't exist.
- * @param {string} tenantId
- * @returns {{ client: Client|null, status: string, qrCode: string|null }}
- */
 async function getOrCreateSession(tenantId) {
-  if (sessions.has(tenantId)) {
-    return sessions.get(tenantId);
-  }
-  return await _createSession(tenantId);
+  if (sessions.has(tenantId)) return sessions.get(tenantId);
+  return _createSession(tenantId);
 }
 
 async function _createSession(tenantId) {
   await ensureMongoose();
 
-  const store = new NormalizedMongoStore({ mongoose });
+  const { state, saveCreds } = await useMongoAuthState(tenantId, mongoose.connection.db);
+
+  let version;
+  try {
+    ({ version } = await fetchLatestBaileysVersion());
+  } catch {
+    version = [2, 3000, 1015901307];  // fallback if network unavailable
+  }
+
   const session = { client: null, status: 'initializing', qrCode: null };
   sessions.set(tenantId, session);
 
-  const client = new Client({
-    authStrategy: new RemoteAuth({
-      clientId: tenantId,
-      store,
-      backupSyncIntervalMs: 300_000,
-    }),
-    puppeteer: {
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-gpu',
-        '--no-first-run',
-        '--no-zygote',
-      ],
-      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
-      headless: true,
-    },
+  const sock = makeWASocket({
+    version,
+    auth: state,
+    printQRInTerminal: false,
+    logger: SILENT_LOGGER,
+    browser: ['Bot Estetiste', 'Chrome', '1.0.0'],
   });
 
-  client.on('qr', (qr) => {
-    console.log(`[${tenantId}] QR code ready`);
-    session.status = 'qr_pending';
-    session.qrCode = qr;
-  });
+  sock.ev.on('creds.update', saveCreds);
 
-  client.on('ready', () => {
-    console.log(`[${tenantId}] Session connected`);
-    session.status = 'connected';
-    session.qrCode = null;
-  });
-
-  client.on('disconnected', (reason) => {
-    console.log(`[${tenantId}] Disconnected: ${reason}`);
-    session.status = 'disconnected';
-    session.qrCode = null;
-    sessions.delete(tenantId);
-  });
-
-  session.client = client;
-
-  // Timeout: se dopo 3 minuti non è né connected né qr_pending, pulisci
-  const initTimeout = setTimeout(() => {
-    if (session.status === 'initializing') {
-      console.error(`[${tenantId}] Initialize timeout — resetting session`);
-      session.status = 'disconnected';
-      sessions.delete(tenantId);
-      try { client.destroy(); } catch(e) {}
+  sock.ev.on('connection.update', ({ connection, lastDisconnect, qr }) => {
+    if (qr) {
+      console.log(`[${tenantId}] QR ready`);
+      session.status = 'qr_pending';
+      session.qrCode = qr;
     }
-  }, 3 * 60 * 1000);
-
-  client.on('qr', () => clearTimeout(initTimeout));
-  client.on('ready', () => clearTimeout(initTimeout));
-
-  client.initialize().catch((err) => {
-    clearTimeout(initTimeout);
-    console.error(`[${tenantId}] Initialize error (will retry on next request):`, err?.message || err);
-    session.status = 'disconnected';
-    sessions.delete(tenantId);
+    if (connection === 'open') {
+      console.log(`[${tenantId}] Connected`);
+      session.status = 'connected';
+      session.qrCode = null;
+    }
+    if (connection === 'close') {
+      const statusCode = lastDisconnect?.error?.output?.statusCode;
+      const loggedOut  = statusCode === DisconnectReason.loggedOut;
+      console.log(`[${tenantId}] Disconnected (loggedOut=${loggedOut})`);
+      sessions.delete(tenantId);
+      session.status  = 'disconnected';
+      session.qrCode  = null;
+      if (!loggedOut) {
+        console.log(`[${tenantId}] Reconnecting in 5s...`);
+        setTimeout(() => getOrCreateSession(tenantId), 5000);
+      }
+    }
   });
+
+  session.client = sock;
   return session;
 }
 
