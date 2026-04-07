@@ -57,9 +57,14 @@ async function _createSession(tenantId) {
       backupSyncIntervalMs: 300_000,
     }),
     puppeteer: {
-      args: process.platform === 'win32'
-        ? ['--no-sandbox', '--disable-setuid-sandbox']
-        : ['--no-sandbox', '--disable-setuid-sandbox', '--single-process', '--no-zygote'],
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+        '--no-first-run',
+        '--no-zygote',
+      ],
       executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
       headless: true,
     },
