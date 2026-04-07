@@ -7,6 +7,7 @@ const { Client, RemoteAuth } = require('whatsapp-web.js');
 const NormalizedMongoStore = require('./src/normalizedMongoStore');
 const mongoose = require('mongoose');
 const qrcode = require('qrcode');
+const archiver = require('archiver');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
@@ -29,51 +30,60 @@ function findSystemChrome() {
   for (const p of candidates) {
     try { if (fs.existsSync(p)) { console.log('   Browser trovato:', p); return p; } } catch(e) {}
   }
-  console.log('   Nessun browser di sistema trovato, uso Chromium bundled.');
   return undefined;
 }
 
+// Comprime una directory in un file zip, ignorando errori su singoli file
+async function zipDirectory(sourceDir, outPath) {
+  return new Promise((resolve, reject) => {
+    const output = fs.createWriteStream(outPath);
+    const archive = archiver('zip', { zlib: { level: 6 } });
+
+    output.on('close', resolve);
+    archive.on('error', reject);
+    archive.on('warning', () => {}); // ignora warning su singoli file
+
+    archive.pipe(output);
+
+    // Aggiungi ogni entry manualmente per ignorare singoli ENOENT
+    const addDirSafe = (dir, prefix) => {
+      let entries;
+      try { entries = fs.readdirSync(dir); } catch(e) { return; }
+      for (const entry of entries) {
+        const fullPath = path.join(dir, entry);
+        const archiveName = prefix ? `${prefix}/${entry}` : entry;
+        try {
+          const stat = fs.statSync(fullPath);
+          if (stat.isDirectory()) {
+            addDirSafe(fullPath, archiveName);
+          } else {
+            try {
+              const buf = fs.readFileSync(fullPath);
+              archive.append(buf, { name: archiveName });
+            } catch(e) {} // file locked o non leggibile → skip
+          }
+        } catch(e) {} // lstat fallito → skip
+      }
+    };
+
+    addDirSafe(sourceDir, '');
+    archive.finalize();
+  });
+}
+
 console.log('');
-console.log('=== WhatsApp Setup Test ===');
+console.log('=== WhatsApp Setup ===');
 console.log('TenantId:', TENANT_ID);
-console.log('Node:', process.version);
 console.log('');
 
 async function main() {
-  // dataPath univoco per ogni run: zero possibilita di dati stale
   const dataPath = path.join(os.tmpdir(), 'wa_setup_' + Date.now());
   fs.mkdirSync(dataPath, { recursive: true });
 
   console.log('1. Connessione MongoDB...');
   await mongoose.connect(MONGODB_URI);
-  console.log('   OK');
-
   const store = new NormalizedMongoStore({ mongoose });
-
-  const _origInject = Client.prototype.inject;
-  Client.prototype.inject = async function() {
-    for (let attempt = 0; attempt < 5; attempt++) {
-      try {
-        return await _origInject.call(this);
-      } catch(err) {
-        const msg = (err && err.message) ? err.message : String(err || '');
-        const isRetryable = msg.includes('Execution context was destroyed') ||
-          msg.includes('Target closed') || msg.includes('Session closed') || msg === 'auth timeout';
-        if (isRetryable && attempt < 4) {
-          console.log('   WhatsApp Web si sta ricaricando, attendere...');
-          try {
-            const url = await this.pupPage.url().catch(() => '');
-            if (url.includes('post_logout') || msg === 'auth timeout') {
-              await this.pupPage.goto('https://web.whatsapp.com/', { waitUntil: 'load', timeout: 30000 }).catch(() => {});
-            } else {
-              await this.pupPage.waitForNavigation({ waitUntil: 'load', timeout: 15000 }).catch(() => {});
-            }
-          } catch(e) {}
-          await new Promise(r => setTimeout(r, 1000));
-        } else { throw err; }
-      }
-    }
-  };
+  console.log('   OK');
 
   const executablePath = findSystemChrome();
 
@@ -96,24 +106,60 @@ async function main() {
     },
   });
 
+  let qrOpened = false;
   client.on('qr', async (qr) => {
-    console.log('\n2. QR ricevuto!');
     const qrPath = path.join(os.tmpdir(), `wa_qr_${TENANT_ID}.png`);
     await qrcode.toFile(qrPath, qr, { width: 400, margin: 2 });
-    console.log('   QR salvato in:', qrPath);
-    try { execSync(`start "" "${qrPath}"`, { shell: true }); } catch(e) {}
-    console.log('   Scansiona: WhatsApp > Impostazioni > Dispositivi collegati > Collega dispositivo');
+    if (!qrOpened) {
+      qrOpened = true;
+      console.log('2. QR generato:', qrPath);
+      try { execSync(`start "" "${qrPath}"`, { shell: true }); } catch(e) {}
+      console.log('   Scansiona: WhatsApp > Dispositivi collegati > Collega dispositivo');
+      console.log('   (il file si aggiorna automaticamente ogni ~20s se scade)');
+    } else {
+      console.log('   QR aggiornato nel file (riaprilo se necessario)');
+    }
   });
 
   client.on('authenticated', () => console.log('3. Autenticato!'));
 
-  client.on('ready', () => {
-    console.log('4. CONNESSO! Salvataggio sessione su MongoDB (attendere ~70 sec)...');
-  });
+  client.on('ready', async () => {
+    console.log('4. CONNESSO! Chiusura Chrome e salvataggio su MongoDB...');
 
-  client.on('remote_session_saved', () => {
+    // Stoppa il timer automatico di RemoteAuth per evitare conflitti
+    try { clearInterval(client.authStrategy.backupSync); } catch(e) {}
+
+    const userDataDir = client.authStrategy.userDataDir;
+    const sessionName = client.authStrategy.sessionName;
+    const authDataPath = client.authStrategy.dataPath;
+
+    // Aspetta 3 secondi per far stabilizzare WhatsApp
+    await new Promise(r => setTimeout(r, 3000));
+
+    // Chiudi Chrome cosi' rilascia i lock sui file del profilo (Windows)
+    console.log('   Chiusura Chrome...');
+    try { await client.pupBrowser.close(); } catch(e) {}
+    await new Promise(r => setTimeout(r, 2000));
+
+    // Comprimi il profilo Chrome (ora senza lock)
+    const zipPath = path.join(authDataPath, `${sessionName}.zip`);
+    console.log('   Compressione profilo Chrome...');
+    await zipDirectory(userDataDir, zipPath);
+
+    const stat = fs.statSync(zipPath);
+    console.log('   ZIP:', (stat.size / 1024).toFixed(0), 'KB');
+
+    if (stat.size < 10000) {
+      console.error('ERRORE: ZIP troppo piccolo — profilo Chrome vuoto o non leggibile.');
+      process.exit(1);
+    }
+
+    // Salva su MongoDB
+    await store.save({ session: path.join(authDataPath, sessionName) });
     console.log('\n=== SESSIONE SALVATA SU MONGODB! Puoi chiudere. ===\n');
+
     try { fs.rmSync(dataPath, { recursive: true, force: true }); } catch(e) {}
+    await mongoose.disconnect();
     process.exit(0);
   });
 
@@ -126,7 +172,7 @@ async function main() {
     if (!isSilent) console.error('Errore non gestito:', msg);
   });
 
-  console.log('\n2. Avvio client (attendere 30-60 sec)...');
+  console.log('2. Avvio Chrome (attendere 30-60 sec)...');
   await client.initialize();
 }
 

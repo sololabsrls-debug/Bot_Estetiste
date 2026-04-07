@@ -35,12 +35,22 @@ class NormalizedMongoStore {
   async save(options) {
     const key = this._key(options.session);
     const zipPath = options.session + '.zip';
+
+    // Verifica ZIP valido prima di uploadare
+    try {
+      const stat = fs.statSync(zipPath);
+      if (stat.size < 1024) throw new Error(`ZIP troppo piccolo (${stat.size}B)`);
+    } catch (e) {
+      throw new Error(`ZIP non valido: ${e.message}`);
+    }
+
     const bucket = new this.mongoose.mongo.GridFSBucket(this.mongoose.connection.db, {
       bucketName: `whatsapp-${key}`,
     });
     await new Promise((resolve, reject) => {
-      fs.createReadStream(zipPath)
-        .pipe(bucket.openUploadStream(`${key}.zip`))
+      const rs = fs.createReadStream(zipPath);
+      rs.on('error', reject);
+      rs.pipe(bucket.openUploadStream(`${key}.zip`))
         .on('error', reject)
         .on('close', resolve);
     });
