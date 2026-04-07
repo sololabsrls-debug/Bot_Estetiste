@@ -129,7 +129,7 @@ async function main() {
   const store = new MongoStore({ mongoose });
   const client = new Client({
     authStrategy: new RemoteAuth({ clientId: TENANT_ID, store, backupSyncIntervalMs: 60000 }),
-    puppeteer: { args: ['--no-sandbox','--disable-setuid-sandbox'], headless: true },
+    puppeteer: { args: ['--no-sandbox','--disable-setuid-sandbox','--window-position=-32000,-32000'], headless: false },
   });
   client.on('qr', async (qr) => { qrDataUrl = await qrcode.toDataURL(qr); });
   client.on('ready', () => {
