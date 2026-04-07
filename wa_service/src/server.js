@@ -85,6 +85,16 @@ Client.prototype.inject = async function() {
 };
 
 async function main() {
+  // Cancella sessione locale stale (causa post_logout=1 se lasciata dal run precedente)
+  const localAuth = path.join(__dirname, '.wwebjs_auth');
+  try {
+    const fs = require('fs');
+    if (fs.existsSync(localAuth)) {
+      fs.rmSync(localAuth, { recursive: true, force: true });
+      console.log('  Sessione locale precedente rimossa.');
+    }
+  } catch(e) {}
+
   console.log('  Connessione database...');
   await mongoose.connect('${mongoUriRaw}');
   const store = new MongoStore({ mongoose });
