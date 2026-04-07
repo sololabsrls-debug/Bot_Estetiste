@@ -143,19 +143,15 @@ main().catch(err => { console.error(err.message); process.exit(1); });
 `);
 });
 
-// ── Setup: scarica installer PowerShell ──────────────────────────
+// ── Setup: scarica installer (bat che bypassa execution policy) ───
 app.get('/setup/:tenantId/script', (req, res) => {
   const { tenantId } = req.params;
   const mongoUri = encodeURIComponent(process.env.MONGODB_URI || '');
   const baseUrl = `https://botestetiste-production-7c31.up.railway.app`;
   const appJsUrl = `${baseUrl}/setup/app.js?t=${tenantId}&m=${mongoUri}`;
 
-  const script = `# ================================================
-# WhatsApp Setup Tool - Gestionale Estetiste
-# Collega il tuo numero WhatsApp ai promemoria.
-# Da eseguire UNA SOLA VOLTA dal tuo computer.
-# ================================================
-
+  // Script PowerShell (verrà base64-encodato e incorporato nel .bat)
+  const psScript = `# WhatsApp Setup Tool - Gestionale Estetiste
 $setupDir = "$env:TEMP\\wa_setup_${tenantId}"
 $appJsUrl = "${appJsUrl}"
 
@@ -164,9 +160,9 @@ Write-Host "  Configurazione WhatsApp" -ForegroundColor Cyan
 Write-Host "  ========================" -ForegroundColor Cyan
 Write-Host ""
 
-# ── Passo 1: Verifica / installa Node.js ─────────────────────────
+# Passo 1: Verifica / installa Node.js
 $nodePath = $null
-try { $null = & node --version 2>&1; $nodePath = "node" } catch {}
+try { $null = node --version 2>&1; $nodePath = "node" } catch {}
 
 if (-not $nodePath) {
   Write-Host "  Node.js non trovato. Scarico e installo automaticamente..." -ForegroundColor Yellow
@@ -183,24 +179,24 @@ if (-not $nodePath) {
   $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
   Write-Host "  Node.js installato!" -ForegroundColor Green
 } else {
-  $ver = & node --version
+  $ver = node --version
   Write-Host "  Node.js trovato: $ver" -ForegroundColor Green
 }
 
-# ── Passo 2: Prepara cartella (pulisci se esiste) ────────────────
+# Passo 2: Prepara cartella
 if (Test-Path $setupDir) { Remove-Item $setupDir -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $setupDir | Out-Null
 Set-Location $setupDir
 
-# ── Passo 3: Scarica setup app ───────────────────────────────────
+# Passo 3: Scarica setup app
 Write-Host "  Scarico programma di setup..." -ForegroundColor Yellow
 (New-Object Net.WebClient).DownloadFile($appJsUrl, "$setupDir\\app.js")
 
-# ── Passo 4: Scrivi package.json (senza BOM) ─────────────────────
+# Passo 4: Scrivi package.json (senza BOM)
 $pkgJson = '{"name":"wa-setup","version":"1.0.0","dependencies":{"whatsapp-web.js":"^1.26.0","wwebjs-mongo":"^1.1.0","mongoose":"^8.3.2","qrcode":"^1.5.3"}}'
 [System.IO.File]::WriteAllText("$setupDir\\package.json", $pkgJson, (New-Object System.Text.UTF8Encoding $false))
 
-# ── Passo 5: Installa dipendenze ─────────────────────────────────
+# Passo 5: Installa dipendenze
 Write-Host "  Installazione dipendenze (3-5 min, non chiudere)..." -ForegroundColor Yellow
 $npmOut = npm install 2>&1
 if ($LASTEXITCODE -ne 0) {
@@ -211,17 +207,28 @@ if ($LASTEXITCODE -ne 0) {
 }
 Write-Host "  Installazione completata!" -ForegroundColor Green
 
-# ── Passo 6: Avvia ───────────────────────────────────────────────
+# Passo 6: Avvia
 Write-Host ""
 Write-Host "  Apertura browser con QR code..." -ForegroundColor Cyan
 Write-Host "  Scansiona il QR con WhatsApp per collegare il numero." -ForegroundColor White
 Write-Host ""
-& node app.js
-`;
+node app.js`;
+
+  // Incorpora il PS script nel .bat via base64 — evita problemi di
+  // execution policy su file .ps1 scaricati da internet (Zone.Identifier)
+  const b64 = Buffer.from(psScript, 'utf8').toString('base64');
+  const tmpPs = `wa_run_${tenantId}.ps1`;
+
+  const batScript = [
+    '@echo off',
+    'title Configurazione WhatsApp - Gestionale Estetiste',
+    `powershell -NoProfile -ExecutionPolicy Bypass -Command "$b='${b64}'; $f=[System.IO.Path]::Combine($env:TEMP,'${tmpPs}'); [System.IO.File]::WriteAllText($f,[System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($b)),(New-Object System.Text.UTF8Encoding $false)); powershell -NoProfile -ExecutionPolicy Bypass -File $f; Remove-Item $f -ErrorAction SilentlyContinue"`,
+    ''
+  ].join('\r\n');
 
   res.setHeader('Content-Type', 'application/octet-stream');
-  res.setHeader('Content-Disposition', 'attachment; filename="configura_whatsapp.ps1"');
-  res.send(script);
+  res.setHeader('Content-Disposition', 'attachment; filename="configura_whatsapp.bat"');
+  res.send(batScript);
 });
 
 // ── Auth middleware ────────────────────────────────────────────────
