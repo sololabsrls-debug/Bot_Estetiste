@@ -110,6 +110,24 @@ async function main() {
     process.exit(1);
   });
 
+  // Gestisce post_logout=1: whatsapp-web.js ri-chiama inject() dal listener
+  // framenavigated in modo asincrono. Se fallisce, e' unhandled rejection che
+  // in Node.js v22 termina il processo. Lo intercettiamo e lo ignoriamo.
+  process.on('unhandledRejection', (err) => {
+    const msg = err && err.message ? err.message : String(err);
+    if (msg.includes('Execution context') || msg.includes('Target closed') || msg.includes('Session closed')) {
+      // inject() fallito dal framenavigated handler — ignorato, il retry interno riprova
+    } else {
+      console.error('  Errore:', msg);
+    }
+  });
+
+  client.on('disconnected', (reason) => {
+    if (reason === 'LOGOUT') {
+      console.log('  Sessione scaduta, in attesa del nuovo QR Code...');
+    }
+  });
+
   console.log('  Avvio in corso (attendere 30-60 secondi)...');
   await client.initialize();
 }
