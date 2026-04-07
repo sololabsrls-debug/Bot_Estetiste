@@ -84,7 +84,7 @@ async def _send_morning_confirmations():
             sb.table("appointments")
             .select(
                 "id, start_at, status, notes, "
-                "client:clients(id, whatsapp_phone, name, first_name, bot_enabled, reminder_morning_enabled), "
+                "client:clients(id, whatsapp_phone, name, bot_enabled, reminder_morning_enabled), "
                 "service:services(name), "
                 "staff:staff(name), "
                 "tenant:tenants(id, name, whatsapp_phone_number_id, whatsapp_access_token, wa_mode)"
@@ -124,7 +124,7 @@ async def _send_morning_confirmations():
             continue
 
         to_phone = client["whatsapp_phone"]
-        client_name = client.get("name") or client.get("first_name") or ""
+        client_name = client.get("name") or ""
         service_name = (
             appt.get("service", {}).get("name", "Appuntamento")
             if appt.get("service") else "Appuntamento"
@@ -232,7 +232,7 @@ async def _send_reminder_1h():
             sb.table("appointments")
             .select(
                 "id, start_at, status, notes, "
-                "client:clients(id, whatsapp_phone, name, first_name, reminder_1h_enabled), "
+                "client:clients(id, whatsapp_phone, name, reminder_1h_enabled), "
                 "service:services(name), "
                 "staff:staff(name), "
                 "tenant:tenants(id, name, whatsapp_phone_number_id, whatsapp_access_token, wa_mode)"
@@ -270,7 +270,7 @@ async def _send_reminder_1h():
             continue
 
         to_phone = client["whatsapp_phone"]
-        client_name = client.get("name") or client.get("first_name") or ""
+        client_name = client.get("name") or ""
         service_name = (
             appt.get("service", {}).get("name", "Appuntamento")
             if appt.get("service") else "Appuntamento"
@@ -327,7 +327,7 @@ async def _send_reminder_day_before():
             sb.table("appointments")
             .select(
                 "id, start_at, notes, "
-                "client:clients(id, whatsapp_phone, name, first_name, reminder_morning_enabled), "
+                "client:clients(id, whatsapp_phone, name, reminder_morning_enabled), "
                 "service:services(name), "
                 "tenant:tenants(id, wa_mode)"
             )
@@ -360,7 +360,7 @@ async def _send_reminder_day_before():
 
         tenant_id = tenant["id"]
         phone = client["whatsapp_phone"]
-        client_name = client.get("name") or client.get("first_name") or ""
+        client_name = client.get("name") or ""
         service_name = (
             appt.get("service", {}).get("name", "Appuntamento")
             if appt.get("service") else "Appuntamento"
