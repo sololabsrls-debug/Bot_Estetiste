@@ -108,4 +108,17 @@ describe('useMongoAuthState', () => {
     const result = await state.keys.get('pre-key', ['999']);
     expect(result).toEqual({});
   });
+
+  it('loads existing creds from MongoDB on init', async () => {
+    const db = makeDb();
+    // Pre-populate the creds collection (simulates a saved session)
+    const savedCreds = { me: { id: '123@s.whatsapp.net', name: 'Test' }, version: 1 };
+    db.collection('wa_creds').findOne.mockResolvedValueOnce({ _id: 'tenant1', creds: savedCreds });
+
+    const { state } = await useMongoAuthState('tenant1', db);
+
+    // Should have loaded the existing creds, not a fresh initAuthCreds()
+    expect(state.creds).toEqual(savedCreds);
+    expect(state.creds.me.id).toBe('123@s.whatsapp.net');
+  });
 });
