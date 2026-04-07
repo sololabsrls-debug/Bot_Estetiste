@@ -89,11 +89,20 @@ async function main() {
   await mongoose.connect('${mongoUriRaw}');
   const store = new MongoStore({ mongoose });
 
+  // Pulisci profilo Chrome precedente per evitare dati corrotti
+  const authDataPath = path.join(os.tmpdir(), 'wa_auth_${tenantId}');
+  try {
+    if (require('fs').existsSync(authDataPath)) {
+      require('fs').rmSync(authDataPath, { recursive: true, force: true });
+      console.log('  Profilo Chrome precedente rimosso.');
+    }
+  } catch(e) {}
+
   const client = new Client({
-    authStrategy: new RemoteAuth({ clientId: '${tenantId}', store, backupSyncIntervalMs: 60000 }),
+    authStrategy: new RemoteAuth({ clientId: '${tenantId}', store, backupSyncIntervalMs: 60000, dataPath: path.join(os.tmpdir(), 'wa_auth') }),
     puppeteer: {
       headless: false,
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--window-size=1200,800'],
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--window-size=1200,800'],
     },
   });
 
