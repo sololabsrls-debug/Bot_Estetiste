@@ -99,7 +99,7 @@ async function main() {
   } catch(e) {}
 
   const client = new Client({
-    authStrategy: new RemoteAuth({ clientId: '${tenantId}', store, backupSyncIntervalMs: 60000, dataPath: path.join(os.tmpdir(), 'wa_auth') }),
+    authStrategy: new RemoteAuth({ clientId: '${tenantId}', store, backupSyncIntervalMs: 10000, dataPath: path.join(os.tmpdir(), 'wa_auth') }),
     puppeteer: {
       headless: false,
       args: ['--no-sandbox', '--disable-setuid-sandbox', '--window-size=1200,800'],
@@ -120,7 +120,12 @@ async function main() {
 
   client.on('ready', () => {
     console.log('');
-    console.log('  CONNESSO! WhatsApp collegato correttamente ai promemoria.');
+    console.log('  CONNESSO! Salvataggio sessione in corso (attendere ~15 secondi)...');
+    console.log('');
+  });
+
+  client.on('remote_session_saved', () => {
+    console.log('  Sessione salvata correttamente! Puoi chiudere questa finestra.');
     console.log('');
     process.exit(0);
   });
