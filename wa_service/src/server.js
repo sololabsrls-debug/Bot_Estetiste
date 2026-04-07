@@ -146,7 +146,11 @@ if (-not $nodePath) {
   Write-Host "  Node.js trovato: $ver" -ForegroundColor Green
 }
 
-# Passo 2: Prepara cartella
+# Passo 2: Chiudi Chrome residui e pulisci cartella
+# (senza questo, Remove-Item fallisce silenziosamente se Chrome ha file bloccati)
+Stop-Process -Name "chrome" -Force -ErrorAction SilentlyContinue
+Stop-Process -Name "node" -Force -ErrorAction SilentlyContinue
+Start-Sleep -Seconds 2
 if (Test-Path $setupDir) { Remove-Item $setupDir -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $setupDir | Out-Null
 Set-Location $setupDir
