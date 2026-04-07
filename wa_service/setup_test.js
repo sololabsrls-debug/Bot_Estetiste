@@ -49,23 +49,17 @@ async function main() {
 
   const store = new MongoStore({ mongoose });
 
-  console.log('2. Ricerca browser...');
-  const executablePath = findSystemChrome();
-
   console.log('3. Avvio client WhatsApp (attendere 30-60 sec)...');
   const client = new Client({
     authStrategy: new RemoteAuth({ clientId: TENANT_ID, store, backupSyncIntervalMs: 60000 }),
     puppeteer: {
-      executablePath,
-      headless: true,
+      headless: false,
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
         '--disable-dev-shm-usage',
-        '--disable-accelerated-2d-canvas',
         '--disable-gpu',
-        '--no-first-run',
-        '--no-zygote',
+        '--window-size=1200,800',
       ],
     },
   });

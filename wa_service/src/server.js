@@ -46,46 +46,23 @@ const mongoose = require('mongoose');
 const qrcode = require('qrcode');
 const path = require('path');
 const os = require('os');
-const fs = require('fs');
 const { execSync } = require('child_process');
-
-// Cerca Chrome di sistema su Windows (piu stabile del Chromium bundled con Puppeteer)
-function findSystemChrome() {
-  const candidates = [
-    process.env.CHROME_PATH,
-    'C:\\\\Program Files\\\\Google\\\\Chrome\\\\Application\\\\chrome.exe',
-    'C:\\\\Program Files (x86)\\\\Google\\\\Chrome\\\\Application\\\\chrome.exe',
-    path.join(os.homedir(), 'AppData\\\\Local\\\\Google\\\\Chrome\\\\Application\\\\chrome.exe'),
-    'C:\\\\Program Files\\\\Microsoft\\\\Edge\\\\Application\\\\msedge.exe',
-    path.join(os.homedir(), 'AppData\\\\Local\\\\Microsoft\\\\Edge\\\\Application\\\\msedge.exe'),
-  ].filter(Boolean);
-  for (const p of candidates) {
-    try { if (fs.existsSync(p)) { console.log('  Browser trovato: ' + p); return p; } } catch(e) {}
-  }
-  console.log('  Nessun browser di sistema trovato, uso Chromium bundled.');
-  return undefined;
-}
 
 async function main() {
   console.log('  Connessione database...');
   await mongoose.connect('${mongoUriRaw}');
   const store = new MongoStore({ mongoose });
 
-  const executablePath = findSystemChrome();
-
   const client = new Client({
     authStrategy: new RemoteAuth({ clientId: '${tenantId}', store, backupSyncIntervalMs: 60000 }),
     puppeteer: {
-      executablePath,
-      headless: true,
+      headless: false,
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
         '--disable-dev-shm-usage',
-        '--disable-accelerated-2d-canvas',
         '--disable-gpu',
-        '--no-first-run',
-        '--no-zygote',
+        '--window-size=1200,800',
       ],
     },
   });
