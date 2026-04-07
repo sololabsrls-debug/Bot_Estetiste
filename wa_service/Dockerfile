@@ -1,10 +1,18 @@
-FROM node:20-slim
+FROM node:20-slim AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends git \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 COPY package*.json ./
 RUN npm ci --omit=dev
 
+FROM node:20-slim
+
+WORKDIR /app
+
+COPY --from=builder /app/node_modules ./node_modules
 COPY src/ ./src/
 
 EXPOSE 3000
