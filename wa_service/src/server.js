@@ -148,7 +148,7 @@ New-Item -ItemType Directory -Force -Path $setupDir | Out-Null
 Set-Location $setupDir
 
 # Passo 3: Scrivi package.json (senza BOM)
-$pkgJson = '{"name":"wa-setup","version":"1.0.0","dependencies":{"whatsapp-web.js":"1.26.0","wwebjs-mongo":"^1.1.0","mongoose":"^8.3.2","qrcode":"^1.5.4"}}'
+$pkgJson = '{"name":"wa-setup","version":"1.0.0","dependencies":{"whatsapp-web.js":"^1.26.0","wwebjs-mongo":"^1.1.0","mongoose":"^8.3.2","qrcode":"^1.5.4"}}'
 [System.IO.File]::WriteAllText("$setupDir\\package.json", $pkgJson, (New-Object System.Text.UTF8Encoding $false))
 
 # Passo 4: Scrivi setup.js (senza BOM) — codice embedded, nessun download
