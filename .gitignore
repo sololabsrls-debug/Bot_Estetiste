@@ -53,5 +53,11 @@ tmp/
 temp/
 *.tmp
 
+# Node.js
+node_modules/
+wa_service/node_modules/
+wa_service/.wwebjs_cache/
+
 # Claude Code
 .claude/
+CLAUDE.md
