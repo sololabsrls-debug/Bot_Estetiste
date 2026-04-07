@@ -34,112 +34,60 @@ app.get('/setup/:tenantId/status', (req, res) => {
 app.get('/setup/app.js', (req, res) => {
   const mongoUri = req.query.m || '';
   const tenantId = req.query.t || '';
-  const PORT = 3099;
 
   res.setHeader('Content-Type', 'application/javascript');
   res.send(`
 const { Client, RemoteAuth } = require('whatsapp-web.js');
 const { MongoStore } = require('wwebjs-mongo');
 const mongoose = require('mongoose');
-const qrcode = require('qrcode');
-const http = require('http');
-const { exec } = require('child_process');
 
 const TENANT_ID = '${tenantId}';
 const MONGODB_URI = '${mongoUri}';
-const PORT = ${PORT};
-
-let qrDataUrl = null;
-let connected = false;
-
-const HTML = \`<!DOCTYPE html>
-<html><head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Collega WhatsApp</title>
-<style>
-  *{box-sizing:border-box;margin:0;padding:0}
-  body{font-family:-apple-system,Arial,sans-serif;background:#f0f2f5;min-height:100vh;display:flex;align-items:center;justify-content:center}
-  .card{background:#fff;border-radius:20px;padding:40px;max-width:420px;width:90%;text-align:center;box-shadow:0 8px 30px rgba(0,0,0,.12)}
-  h1{color:#1a1a1a;font-size:22px;margin:12px 0 8px}
-  .sub{color:#666;font-size:14px;margin-bottom:24px}
-  .qr-box{background:#f8f8f8;border-radius:12px;padding:16px;margin:16px 0;display:none}
-  .qr-box img{width:220px;height:220px;display:block;margin:0 auto}
-  .steps{background:#f0faf0;border-radius:10px;padding:14px;text-align:left;font-size:13px;color:#444;line-height:2;display:none;margin:12px 0}
-  .steps b{color:#25D366}
-  .loading{color:#999;font-size:14px;padding:20px 0}
-  .spin{display:inline-block;width:18px;height:18px;border:2px solid #eee;border-top-color:#25D366;border-radius:50%;animation:s .8s linear infinite;vertical-align:middle;margin-right:6px}
-  @keyframes s{to{transform:rotate(360deg)}}
-  .ok{color:#25D366;font-size:18px;font-weight:700;padding:20px 0}
-  .ok-icon{font-size:56px;display:block;margin-bottom:10px}
-  .note{color:#999;font-size:11px;margin-top:10px}
-</style></head><body>
-<div class="card">
-  <div style="font-size:42px">📱</div>
-  <h1>Collega WhatsApp</h1>
-  <p class="sub">Setup una tantum &mdash; ci vogliono 2 minuti</p>
-  <div id="out">
-    <div class="loading"><span class="spin"></span>Avvio in corso&hellip;</div>
-  </div>
-</div>
-<script>
-let shown=false;
-function tick(){
-  fetch('/status').then(r=>r.json()).then(d=>{
-    if(d.connected){
-      document.getElementById('out').innerHTML='<div class="ok"><span class="ok-icon">✅</span>WhatsApp connesso!<br><small style="font-weight:400;font-size:14px;color:#666">Torna sul gestionale, vedrai la spunta verde.<br>Questa finestra si chiude automaticamente.</small></div>';
-      clearInterval(t);return;
-    }
-    if(d.qrReady&&!shown){shown=true;
-      document.getElementById('out').innerHTML=
-        '<div class="steps" id="st"><b>Come fare:</b><br>1. Apri WhatsApp sul telefono<br>2. Menu &#8942; &rarr; Dispositivi collegati<br>3. Collega dispositivo<br>4. Inquadra il QR</div>'+
-        '<div class="qr-box" id="qb"><img id="qi" src="/qr?t='+Date.now()+'" alt="QR"></div>'+
-        '<p class="note">Il QR si aggiorna automaticamente</p>';
-      document.getElementById('st').style.display='block';
-      document.getElementById('qb').style.display='block';
-    }
-    if(d.qrReady){const i=document.getElementById('qi');if(i)i.src='/qr?t='+Date.now();}
-  }).catch(()=>{});
-}
-const t=setInterval(tick,2000);tick();
-</script></body></html>\`;
-
-const server = http.createServer(async (req, res) => {
-  if (req.url.startsWith('/qr')) {
-    if (!qrDataUrl) { res.writeHead(404); res.end(); return; }
-    const buf = Buffer.from(qrDataUrl.replace(/^data:image\\/png;base64,/,''), 'base64');
-    res.writeHead(200, {'Content-Type':'image/png'}); res.end(buf); return;
-  }
-  if (req.url.startsWith('/status')) {
-    res.writeHead(200, {'Content-Type':'application/json'});
-    res.end(JSON.stringify({ connected, qrReady: !!qrDataUrl })); return;
-  }
-  res.writeHead(200, {'Content-Type':'text/html; charset=utf-8'}); res.end(HTML);
-});
-
-server.listen(PORT, () => {
-  const url = 'http://localhost:' + PORT;
-  const cmd = process.platform === 'win32' ? 'start ' + url : 'open ' + url;
-  exec(cmd);
-  console.log('Browser aperto: ' + url);
-});
 
 async function main() {
+  console.log('');
+  console.log('  Connessione al database...');
   await mongoose.connect(MONGODB_URI);
+
   const store = new MongoStore({ mongoose });
   const client = new Client({
     authStrategy: new RemoteAuth({ clientId: TENANT_ID, store, backupSyncIntervalMs: 60000 }),
-    puppeteer: { args: ['--no-sandbox','--disable-setuid-sandbox','--window-position=-32000,-32000'], headless: false },
+    puppeteer: {
+      headless: false,
+      defaultViewport: null,
+      args: ['--start-maximized', '--no-sandbox', '--disable-setuid-sandbox'],
+    },
   });
-  client.on('qr', async (qr) => { qrDataUrl = await qrcode.toDataURL(qr); });
+
+  client.on('qr', () => {
+    console.log('');
+    console.log('  ============================================');
+    console.log('  QR pronto! Scansiona con WhatsApp:');
+    console.log('  Apri WhatsApp > 3 puntini > Dispositivi collegati');
+    console.log('  ============================================');
+    console.log('');
+  });
+
   client.on('ready', () => {
-    connected = true;
-    setTimeout(() => { server.close(); process.exit(0); }, 12000);
+    console.log('');
+    console.log('  Connesso! WhatsApp e collegato ai promemoria.');
+    console.log('  Puoi chiudere questa finestra.');
+    setTimeout(() => process.exit(0), 5000);
   });
-  client.on('auth_failure', () => { console.error('Auth fallita.'); process.exit(1); });
+
+  client.on('auth_failure', () => {
+    console.error('  Autenticazione fallita. Richiudi e riprova.');
+    process.exit(1);
+  });
+
+  console.log('  Apertura WhatsApp Web in corso (30-60 sec)...');
   await client.initialize();
 }
-main().catch(err => { console.error(err.message); process.exit(1); });
+
+main().catch(err => {
+  console.error('  Errore:', err.message);
+  process.exit(1);
+});
 `);
 });
 
@@ -193,7 +141,7 @@ Write-Host "  Scarico programma di setup..." -ForegroundColor Yellow
 (New-Object Net.WebClient).DownloadFile($appJsUrl, "$setupDir\\app.js")
 
 # Passo 4: Scrivi package.json (senza BOM)
-$pkgJson = '{"name":"wa-setup","version":"1.0.0","dependencies":{"whatsapp-web.js":"^1.26.0","wwebjs-mongo":"^1.1.0","mongoose":"^8.3.2","qrcode":"^1.5.3"}}'
+$pkgJson = '{"name":"wa-setup","version":"1.0.0","dependencies":{"whatsapp-web.js":"^1.26.0","wwebjs-mongo":"^1.1.0","mongoose":"^8.3.2"}}'
 [System.IO.File]::WriteAllText("$setupDir\\package.json", $pkgJson, (New-Object System.Text.UTF8Encoding $false))
 
 # Passo 5: Installa dipendenze
