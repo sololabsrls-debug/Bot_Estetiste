@@ -11,7 +11,6 @@ server.on('error', (err) => {
 });
 
 process.on('unhandledRejection', (err) => {
-  // Log ma non uscire — errori interni di Puppeteer/whatsapp-web.js
-  // non devono abbattere il server
+  // Log but don't exit — internal Baileys/WS errors should not crash the server
   console.error('Unhandled rejection (non-fatal):', err?.message || err);
 });

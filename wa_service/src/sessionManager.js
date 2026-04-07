@@ -15,6 +15,7 @@ const { useMongoAuthState } = require('./mongoAuthState');
 
 // Map<tenantId, { client, status, qrCode }>
 const sessions = new Map();
+const retryCounts = new Map();
 
 // Silent logger — Baileys is very verbose by default
 const SILENT_LOGGER = {
@@ -77,6 +78,7 @@ async function _createSession(tenantId) {
       console.log(`[${tenantId}] Connected`);
       session.status = 'connected';
       session.qrCode = null;
+      retryCounts.delete(tenantId);  // reset counter on success
     }
     if (connection === 'close') {
       const statusCode = lastDisconnect?.error?.output?.statusCode;
@@ -86,8 +88,16 @@ async function _createSession(tenantId) {
       session.status  = 'disconnected';
       session.qrCode  = null;
       if (!loggedOut) {
-        console.log(`[${tenantId}] Reconnecting in 5s...`);
-        setTimeout(() => getOrCreateSession(tenantId), 5000);
+        const retries = (retryCounts.get(tenantId) || 0) + 1;
+        if (retries <= 5) {
+          retryCounts.set(tenantId, retries);
+          const delay = Math.min(5000 * retries, 30000);
+          console.log(`[${tenantId}] Reconnecting in ${delay}ms (attempt ${retries}/5)...`);
+          setTimeout(() => getOrCreateSession(tenantId), delay);
+        } else {
+          console.error(`[${tenantId}] Max reconnect attempts reached. Manual intervention needed.`);
+          retryCounts.delete(tenantId);
+        }
       }
     }
   });

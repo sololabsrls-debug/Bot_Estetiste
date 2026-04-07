@@ -31,6 +31,7 @@ function makeDb() {
   const makeColl = (store) => ({
     findOne: jest.fn(async ({ _id }) => store[_id] || null),
     updateOne: jest.fn(async ({ _id }, { $set }) => { store[_id] = { _id, ...store[_id], ...$set }; }),
+    createIndex: jest.fn(async () => {}),
     find: jest.fn(({ tenantId, type, id: { $in: ids } }) => ({
       toArray: async () => Object.values(store).filter(
         d => d.tenantId === tenantId && d.type === type && ids.includes(d.id)

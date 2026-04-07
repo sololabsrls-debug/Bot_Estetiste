@@ -1,4 +1,4 @@
 node_modules
 tests
-.wwebjs_auth
+.wwebjs_cache/
 *.md

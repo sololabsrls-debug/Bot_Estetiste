@@ -16,6 +16,7 @@ const { initAuthCreds, BufferJSON } = require('@whiskeysockets/baileys');
 async function useMongoAuthState(tenantId, db) {
   const credsColl = db.collection('wa_creds');
   const keysColl  = db.collection('wa_keys');
+  keysColl.createIndex({ tenantId: 1, type: 1, id: 1 }, { background: true }).catch(() => {});
 
   // Load or initialize credentials
   const existing = await credsColl.findOne({ _id: tenantId });
@@ -56,11 +57,15 @@ async function useMongoAuthState(tenantId, db) {
   };
 
   const saveCreds = async () => {
-    await credsColl.updateOne(
-      { _id: tenantId },
-      { $set: { creds: JSON.parse(JSON.stringify(creds, BufferJSON.replacer)) } },
-      { upsert: true }
-    );
+    try {
+      await credsColl.updateOne(
+        { _id: tenantId },
+        { $set: { creds: JSON.parse(JSON.stringify(creds, BufferJSON.replacer)) } },
+        { upsert: true }
+      );
+    } catch (err) {
+      console.error(`[mongoAuthState] saveCreds failed for ${tenantId}:`, err.message);
+    }
   };
 
   return { state, saveCreds };
