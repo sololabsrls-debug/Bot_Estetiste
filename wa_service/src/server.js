@@ -21,6 +21,15 @@ const { sendWithAntibanMeasures } = require('./antibanUtils');
 const app = express();
 app.use(express.json());
 
+// ── CORS ──────────────────────────────────────────────────────────
+app.use((req, res, next) => {
+  res.set('Access-Control-Allow-Origin', '*');
+  res.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.set('Access-Control-Allow-Headers', 'Content-Type, X-API-Key');
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  next();
+});
+
 // ── Health check (no auth required) ──────────────────────────────
 app.get('/health', (req, res) => {
   res.json({ status: 'ok' });
