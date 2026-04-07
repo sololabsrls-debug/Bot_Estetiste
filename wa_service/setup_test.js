@@ -49,18 +49,28 @@ async function main() {
 
   const store = new MongoStore({ mongoose });
 
-  console.log('3. Avvio client WhatsApp (attendere 30-60 sec)...');
+  // Monkey-patch inject per gestire il reload di WhatsApp Web al primo avvio
+  const _origInject = Client.prototype.inject;
+  Client.prototype.inject = async function() {
+    for (let attempt = 0; attempt < 5; attempt++) {
+      try {
+        return await _origInject.call(this);
+      } catch(err) {
+        const isCtx = err && err.message && err.message.includes('Execution context was destroyed');
+        if (isCtx && attempt < 4) {
+          console.log('   WhatsApp Web si sta ricaricando, attendere...');
+          await this.pupPage.waitForNavigation({ waitUntil: 'load', timeout: 15000 }).catch(() => {});
+          await new Promise(r => setTimeout(r, 500));
+        } else { throw err; }
+      }
+    }
+  };
+
   const client = new Client({
     authStrategy: new RemoteAuth({ clientId: TENANT_ID, store, backupSyncIntervalMs: 60000 }),
     puppeteer: {
       headless: false,
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-gpu',
-        '--window-size=1200,800',
-      ],
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--window-size=1200,800'],
     },
   });
 
@@ -69,41 +79,17 @@ async function main() {
     const qrPath = path.join(os.tmpdir(), `wa_qr_${TENANT_ID}.png`);
     await qrcode.toFile(qrPath, qr, { width: 400, margin: 2 });
     console.log('   QR salvato in:', qrPath);
-    try {
-      execSync(`start "" "${qrPath}"`, { shell: true });
-      console.log('   Immagine aperta nel visore. Scansiona con WhatsApp.');
-    } catch(e) {
-      console.error('   Errore apertura automatica:', e.message);
-      console.log('   >>> Apri manualmente:', qrPath);
-    }
-    console.log('');
+    try { execSync(`start "" "${qrPath}"`, { shell: true }); console.log('   Immagine aperta.'); }
+    catch(e) { console.log('   Apri manualmente:', qrPath); }
     console.log('   WhatsApp > Impostazioni > Dispositivi collegati > Collega dispositivo');
     console.log('   In attesa della scansione...');
   });
 
-  client.on('loading_screen', (percent, message) => {
-    process.stdout.write(`\r   Loading: ${percent}% - ${message}          `);
-  });
+  client.on('authenticated', () => console.log('\n   Autenticato!'));
+  client.on('ready', () => { console.log('\n=== CONNESSO! ==='); process.exit(0); });
+  client.on('auth_failure', (msg) => { console.error('Auth fallita:', msg); process.exit(1); });
 
-  client.on('authenticated', () => {
-    console.log('\n   Autenticato!');
-  });
-
-  client.on('ready', () => {
-    console.log('');
-    console.log('=== CONNESSO! WhatsApp collegato correttamente. ===');
-    process.exit(0);
-  });
-
-  client.on('auth_failure', (msg) => {
-    console.error('Autenticazione fallita:', msg);
-    process.exit(1);
-  });
-
-  client.on('disconnected', (reason) => {
-    console.log('Disconnesso:', reason);
-  });
-
+  console.log('3. Avvio client WhatsApp (attendere 30-60 sec)...');
   await client.initialize();
 }
 

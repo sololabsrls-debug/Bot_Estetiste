@@ -48,6 +48,27 @@ const path = require('path');
 const os = require('os');
 const { execSync } = require('child_process');
 
+// Monkey-patch: inject() viene chiamato subito dopo page.goto(). Al primo avvio
+// (nessuna sessione) WhatsApp Web fa un reload via service worker che distrugge
+// il contesto Puppeteer. Aspettiamo che la navigazione finisca e riproviamo.
+const _origInject = Client.prototype.inject;
+Client.prototype.inject = async function() {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      return await _origInject.call(this);
+    } catch(err) {
+      const isCtxDestroyed = err && err.message && err.message.includes('Execution context was destroyed');
+      if (isCtxDestroyed && attempt < 4) {
+        console.log('  WhatsApp Web si sta ricaricando, attendere...');
+        await this.pupPage.waitForNavigation({ waitUntil: 'load', timeout: 15000 }).catch(() => {});
+        await new Promise(r => setTimeout(r, 500));
+      } else {
+        throw err;
+      }
+    }
+  }
+};
+
 async function main() {
   console.log('  Connessione database...');
   await mongoose.connect('${mongoUriRaw}');
@@ -57,15 +78,10 @@ async function main() {
     authStrategy: new RemoteAuth({ clientId: '${tenantId}', store, backupSyncIntervalMs: 60000 }),
     puppeteer: {
       headless: false,
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-gpu',
-        '--window-size=1200,800',
-      ],
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--window-size=1200,800'],
     },
   });
+
   client.on('qr', async (qr) => {
     const qrPath = path.join(os.tmpdir(), 'wa_qr_${tenantId}.png');
     await qrcode.toFile(qrPath, qr, { width: 400, margin: 2 });
@@ -77,20 +93,23 @@ async function main() {
     console.log('');
     try { execSync('start "" "' + qrPath + '"', { shell: true }); } catch(e) {}
   });
+
   client.on('ready', () => {
     console.log('');
     console.log('  CONNESSO! WhatsApp collegato correttamente ai promemoria.');
     console.log('');
     process.exit(0);
   });
+
   client.on('auth_failure', () => {
     console.log('  Autenticazione fallita. Richiudi e riprova.');
     process.exit(1);
   });
+
   console.log('  Avvio in corso (attendere 30-60 secondi)...');
   await client.initialize();
 }
-main().catch(err => { console.error('  Errore:', err.message); console.error(err.stack); });`;
+main().catch(err => { console.error('  Errore:', err.message); });`;
 
   const psScript = `# WhatsApp Setup Tool - Gestionale Estetiste
 $setupDir = "$env:TEMP\\wa_setup_${tenantId}"
