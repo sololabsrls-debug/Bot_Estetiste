@@ -85,15 +85,17 @@ Client.prototype.inject = async function() {
 };
 
 async function main() {
-  // Cancella sessione locale stale (causa post_logout=1 se lasciata dal run precedente)
+  // Forza chiusura Chrome residui e cancella sessione locale stale
+  try { execSync('taskkill /F /IM chrome.exe /T 2>nul', { shell: true }); } catch(e) {}
+  await new Promise(r => setTimeout(r, 2000));
+  const fs = require('fs');
   const localAuth = path.join(__dirname, '.wwebjs_auth');
   try {
-    const fs = require('fs');
     if (fs.existsSync(localAuth)) {
       fs.rmSync(localAuth, { recursive: true, force: true });
       console.log('  Sessione locale precedente rimossa.');
     }
-  } catch(e) {}
+  } catch(e) { console.log('  Avviso: impossibile rimuovere sessione locale:', e.message); }
 
   console.log('  Connessione database...');
   await mongoose.connect('${mongoUriRaw}');
