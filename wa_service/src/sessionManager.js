@@ -85,7 +85,22 @@ async function _createSession(tenantId) {
   });
 
   session.client = client;
+
+  // Timeout: se dopo 3 minuti non è né connected né qr_pending, pulisci
+  const initTimeout = setTimeout(() => {
+    if (session.status === 'initializing') {
+      console.error(`[${tenantId}] Initialize timeout — resetting session`);
+      session.status = 'disconnected';
+      sessions.delete(tenantId);
+      try { client.destroy(); } catch(e) {}
+    }
+  }, 3 * 60 * 1000);
+
+  client.on('qr', () => clearTimeout(initTimeout));
+  client.on('ready', () => clearTimeout(initTimeout));
+
   client.initialize().catch((err) => {
+    clearTimeout(initTimeout);
     console.error(`[${tenantId}] Initialize error (will retry on next request):`, err?.message || err);
     session.status = 'disconnected';
     sessions.delete(tenantId);
