@@ -202,10 +202,10 @@ $pkgJson = '{"name":"wa-setup","version":"1.0.0","dependencies":{"whatsapp-web.j
 
 # ── Passo 5: Installa dipendenze ─────────────────────────────────
 Write-Host "  Installazione dipendenze (3-5 min, non chiudere)..." -ForegroundColor Yellow
-$npmOut = & npm install 2>&1
+$npmOut = npm install 2>&1
 if ($LASTEXITCODE -ne 0) {
   Write-Host "  ERRORE durante l'installazione:" -ForegroundColor Red
-  $npmOut | Select-String "error" | Select-Object -First 5 | ForEach-Object { Write-Host "  $_" -ForegroundColor Red }
+  $npmOut | ForEach-Object { Write-Host "  $_" -ForegroundColor Red }
   Read-Host "Premi INVIO per uscire"
   exit 1
 }
