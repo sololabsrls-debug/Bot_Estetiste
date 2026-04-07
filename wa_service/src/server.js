@@ -187,7 +187,8 @@ if (-not $nodePath) {
   Write-Host "  Node.js trovato: $ver" -ForegroundColor Green
 }
 
-# ── Passo 2: Prepara cartella ────────────────────────────────────
+# ── Passo 2: Prepara cartella (pulisci se esiste) ────────────────
+if (Test-Path $setupDir) { Remove-Item $setupDir -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $setupDir | Out-Null
 Set-Location $setupDir
 
@@ -195,14 +196,19 @@ Set-Location $setupDir
 Write-Host "  Scarico programma di setup..." -ForegroundColor Yellow
 (New-Object Net.WebClient).DownloadFile($appJsUrl, "$setupDir\\app.js")
 
-# ── Passo 4: Scrivi package.json ─────────────────────────────────
-@'
-{"name":"wa-setup","version":"1.0.0","dependencies":{"whatsapp-web.js":"^1.26.0","wwebjs-mongo":"^1.1.0","mongoose":"^8.3.2","qrcode":"^1.5.3"}}
-'@ | Set-Content "$setupDir\\package.json" -Encoding UTF8
+# ── Passo 4: Scrivi package.json (senza BOM) ─────────────────────
+$pkgJson = '{"name":"wa-setup","version":"1.0.0","dependencies":{"whatsapp-web.js":"^1.26.0","wwebjs-mongo":"^1.1.0","mongoose":"^8.3.2","qrcode":"^1.5.3"}}'
+[System.IO.File]::WriteAllText("$setupDir\\package.json", $pkgJson, (New-Object System.Text.UTF8Encoding $false))
 
 # ── Passo 5: Installa dipendenze ─────────────────────────────────
 Write-Host "  Installazione dipendenze (3-5 min, non chiudere)..." -ForegroundColor Yellow
-& npm install --quiet 2>&1 | Out-Null
+$npmOut = & npm install 2>&1
+if ($LASTEXITCODE -ne 0) {
+  Write-Host "  ERRORE durante l'installazione:" -ForegroundColor Red
+  $npmOut | Select-String "error" | Select-Object -First 5 | ForEach-Object { Write-Host "  $_" -ForegroundColor Red }
+  Read-Host "Premi INVIO per uscire"
+  exit 1
+}
 Write-Host "  Installazione completata!" -ForegroundColor Green
 
 # ── Passo 6: Avvia ───────────────────────────────────────────────
