@@ -235,7 +235,7 @@ async def _send_reminder_1h():
                 "client:clients(id, whatsapp_phone, name, first_name, reminder_1h_enabled), "
                 "service:services(name), "
                 "staff:staff(name), "
-                "tenant:tenants(id, name, whatsapp_phone_number_id, whatsapp_access_token)"
+                "tenant:tenants(id, name, whatsapp_phone_number_id, whatsapp_access_token, wa_mode)"
             )
             .in_("status", ["confirmed"])
             .gte("start_at", target_start.isoformat())
@@ -258,6 +258,10 @@ async def _send_reminder_1h():
 
         # Skip if 1h reminder disabled for this client
         if not client.get("reminder_1h_enabled", True):
+            continue
+
+        # Salta tenant unofficial — usano solo il promemoria giorno prima
+        if tenant.get("wa_mode") == "unofficial":
             continue
 
         phone_number_id = tenant.get("whatsapp_phone_number_id")
