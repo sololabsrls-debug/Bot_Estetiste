@@ -57,12 +57,9 @@ async function _createSession(tenantId) {
       backupSyncIntervalMs: 300_000,
     }),
     puppeteer: {
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--single-process',
-        '--no-zygote',
-      ],
+      args: process.platform === 'win32'
+        ? ['--no-sandbox', '--disable-setuid-sandbox']
+        : ['--no-sandbox', '--disable-setuid-sandbox', '--single-process', '--no-zygote'],
       executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
       headless: true,
     },
@@ -88,8 +85,12 @@ async function _createSession(tenantId) {
   });
 
   session.client = client;
-  client.initialize(); // non-blocking
+  client.initialize().catch((err) => {
+    console.error(`[${tenantId}] Initialize error (will retry on next request):`, err?.message || err);
+    session.status = 'disconnected';
+    sessions.delete(tenantId);
+  });
   return session;
 }
 
-module.exports = { getOrCreateSession };
+module.exports = { getOrCreateSession, sessions };
