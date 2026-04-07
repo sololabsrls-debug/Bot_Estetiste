@@ -30,78 +30,53 @@ app.get('/setup/:tenantId/status', (req, res) => {
   res.json({ status: session ? session.status : 'not_started' });
 });
 
-// ── Setup: serve il setup.js (scaricato dal PS script) ───────────
-app.get('/setup/app.js', (req, res) => {
-  const mongoUri = req.query.m || '';
-  const tenantId = req.query.t || '';
-
-  res.setHeader('Content-Type', 'application/javascript');
-  res.send(`
-const { Client, RemoteAuth } = require('whatsapp-web.js');
-const { MongoStore } = require('wwebjs-mongo');
-const mongoose = require('mongoose');
-
-const TENANT_ID = '${tenantId}';
-const MONGODB_URI = '${mongoUri}';
-
-async function main() {
-  console.log('');
-  console.log('  Connessione al database...');
-  await mongoose.connect(MONGODB_URI);
-
-  const store = new MongoStore({ mongoose });
-  const client = new Client({
-    authStrategy: new RemoteAuth({ clientId: TENANT_ID, store, backupSyncIntervalMs: 60000 }),
-    puppeteer: {
-      headless: false,
-      defaultViewport: null,
-      args: ['--start-maximized', '--no-sandbox', '--disable-setuid-sandbox'],
-    },
-  });
-
-  client.on('qr', () => {
-    console.log('');
-    console.log('  ============================================');
-    console.log('  QR pronto! Scansiona con WhatsApp:');
-    console.log('  Apri WhatsApp > 3 puntini > Dispositivi collegati');
-    console.log('  ============================================');
-    console.log('');
-  });
-
-  client.on('ready', () => {
-    console.log('');
-    console.log('  Connesso! WhatsApp e collegato ai promemoria.');
-    console.log('  Puoi chiudere questa finestra.');
-    setTimeout(() => process.exit(0), 5000);
-  });
-
-  client.on('auth_failure', () => {
-    console.error('  Autenticazione fallita. Richiudi e riprova.');
-    process.exit(1);
-  });
-
-  console.log('  Apertura WhatsApp Web in corso (30-60 sec)...');
-  await client.initialize();
-}
-
-main().catch(err => {
-  console.error('  Errore:', err.message);
-  process.exit(1);
-});
-`);
-});
+// ── Setup: endpoint legacy (non più usato dal nuovo bat) ─────────
+app.get('/setup/app.js', (req, res) => res.status(410).json({ error: 'deprecated' }));
 
 // ── Setup: scarica installer (bat che bypassa execution policy) ───
 app.get('/setup/:tenantId/script', (req, res) => {
   const { tenantId } = req.params;
-  const mongoUri = encodeURIComponent(process.env.MONGODB_URI || '');
-  const baseUrl = `https://botestetiste-production-7c31.up.railway.app`;
-  const appJsUrl = `${baseUrl}/setup/app.js?t=${tenantId}&m=${mongoUri}`;
+  const mongoUriRaw = process.env.MONGODB_URI || '';
 
-  // Script PowerShell (verrà base64-encodato e incorporato nel .bat)
+  // JS embedded direttamente nel PS — nessun download da Railway.
+  // Stesso approccio del vecchio script che funzionava (qrcode-terminal nel terminale).
+  const setupJs = `const { Client, RemoteAuth } = require('whatsapp-web.js');
+const { MongoStore } = require('wwebjs-mongo');
+const mongoose = require('mongoose');
+const qrcode = require('qrcode-terminal');
+
+async function main() {
+  console.log('  Connessione database...');
+  await mongoose.connect('${mongoUriRaw}');
+  const store = new MongoStore({ mongoose });
+  const client = new Client({
+    authStrategy: new RemoteAuth({ clientId: '${tenantId}', store, backupSyncIntervalMs: 60000 }),
+    puppeteer: { args: ['--no-sandbox', '--disable-setuid-sandbox'], headless: false },
+  });
+  client.on('qr', (qr) => {
+    console.log('');
+    console.log('  Scansiona il QR con WhatsApp:');
+    console.log('  Apri WhatsApp > Menu > Dispositivi collegati > Collega dispositivo');
+    console.log('');
+    qrcode.generate(qr, { small: true });
+  });
+  client.on('ready', () => {
+    console.log('');
+    console.log('  CONNESSO! WhatsApp collegato ai promemoria.');
+    console.log('  Questa finestra si chiudera in 10 secondi...');
+    setTimeout(() => process.exit(0), 10000);
+  });
+  client.on('auth_failure', () => {
+    console.log('  Autenticazione fallita. Richiudi e riprova.');
+    process.exit(1);
+  });
+  console.log('  Avvio WhatsApp Web (attendere 30-60 secondi)...');
+  await client.initialize();
+}
+main().catch(err => { console.error('  Errore:', err.message); process.exit(1); });`;
+
   const psScript = `# WhatsApp Setup Tool - Gestionale Estetiste
 $setupDir = "$env:TEMP\\wa_setup_${tenantId}"
-$appJsUrl = "${appJsUrl}"
 
 Write-Host ""
 Write-Host "  Configurazione WhatsApp" -ForegroundColor Cyan
@@ -136,13 +111,14 @@ if (Test-Path $setupDir) { Remove-Item $setupDir -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $setupDir | Out-Null
 Set-Location $setupDir
 
-# Passo 3: Scarica setup app
-Write-Host "  Scarico programma di setup..." -ForegroundColor Yellow
-(New-Object Net.WebClient).DownloadFile($appJsUrl, "$setupDir\\app.js")
-
-# Passo 4: Scrivi package.json (senza BOM)
-$pkgJson = '{"name":"wa-setup","version":"1.0.0","dependencies":{"whatsapp-web.js":"^1.26.0","wwebjs-mongo":"^1.1.0","mongoose":"^8.3.2"}}'
+# Passo 3: Scrivi package.json (senza BOM)
+$pkgJson = '{"name":"wa-setup","version":"1.0.0","dependencies":{"whatsapp-web.js":"1.26.0","wwebjs-mongo":"^1.1.0","mongoose":"^8.3.2","qrcode-terminal":"^0.12.0"}}'
 [System.IO.File]::WriteAllText("$setupDir\\package.json", $pkgJson, (New-Object System.Text.UTF8Encoding $false))
+
+# Passo 4: Scrivi setup.js (senza BOM) — codice embedded, nessun download
+$b64js = '${Buffer.from(setupJs, 'utf8').toString('base64')}'
+$setupJsContent = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($b64js))
+[System.IO.File]::WriteAllText("$setupDir\\setup.js", $setupJsContent, (New-Object System.Text.UTF8Encoding $false))
 
 # Passo 5: Installa dipendenze
 Write-Host "  Installazione dipendenze (3-5 min, non chiudere)..." -ForegroundColor Yellow
@@ -157,13 +133,11 @@ Write-Host "  Installazione completata!" -ForegroundColor Green
 
 # Passo 6: Avvia
 Write-Host ""
-Write-Host "  Apertura browser con QR code..." -ForegroundColor Cyan
-Write-Host "  Scansiona il QR con WhatsApp per collegare il numero." -ForegroundColor White
+Write-Host "  Avvio in corso (attendere 30-60 secondi)..." -ForegroundColor Cyan
+Write-Host "  Apparira una finestra Chrome: scansiona il QR con WhatsApp." -ForegroundColor White
 Write-Host ""
-node app.js`;
+node setup.js`;
 
-  // Incorpora il PS script nel .bat via base64 — evita problemi di
-  // execution policy su file .ps1 scaricati da internet (Zone.Identifier)
   const b64 = Buffer.from(psScript, 'utf8').toString('base64');
   const tmpPs = `wa_run_${tenantId}.ps1`;
 
