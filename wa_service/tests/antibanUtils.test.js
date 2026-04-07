@@ -11,21 +11,23 @@ describe('randomDelay', () => {
 });
 
 describe('sendWithAntibanMeasures', () => {
-  it('calls sendPresenceUpdate composing, sendMessage, sendPresenceUpdate paused in order', async () => {
+  it('calls composing → sendMessage → paused in correct order', async () => {
+    const callOrder = [];
     const mockSock = {
-      sendPresenceUpdate: jest.fn().mockResolvedValue({}),
-      sendMessage: jest.fn().mockResolvedValue({}),
+      sendPresenceUpdate: jest.fn((state) => { callOrder.push(`presence:${state}`); return Promise.resolve({}); }),
+      sendMessage: jest.fn(() => { callOrder.push('sendMessage'); return Promise.resolve({}); }),
     };
 
     await sendWithAntibanMeasures(mockSock, '393401234567', 'Ciao!');
 
     const jid = '393401234567@s.whatsapp.net';
+
+    // Verify correct arguments
     expect(mockSock.sendPresenceUpdate).toHaveBeenCalledWith('composing', jid);
     expect(mockSock.sendMessage).toHaveBeenCalledWith(jid, { text: 'Ciao!' });
     expect(mockSock.sendPresenceUpdate).toHaveBeenCalledWith('paused', jid);
-    // Verify order: composing first, paused last
-    const calls = mockSock.sendPresenceUpdate.mock.calls;
-    expect(calls[0][0]).toBe('composing');
-    expect(calls[1][0]).toBe('paused');
+
+    // Verify the FULL interleaved order: composing first, sendMessage in middle, paused last
+    expect(callOrder).toEqual(['presence:composing', 'sendMessage', 'presence:paused']);
   });
 });
