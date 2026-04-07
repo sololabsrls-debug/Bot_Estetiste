@@ -56,8 +56,12 @@ async function main() {
       try {
         return await _origInject.call(this);
       } catch(err) {
-        const isCtx = err && err.message && err.message.includes('Execution context was destroyed');
-        if (isCtx && attempt < 4) {
+        const isRetryable = err && err.message && (
+          err.message.includes('Execution context was destroyed') ||
+          err.message.includes('Target closed') ||
+          err.message.includes('Session closed')
+        );
+        if (isRetryable && attempt < 4) {
           console.log('   WhatsApp Web si sta ricaricando, attendere...');
           await this.pupPage.waitForNavigation({ waitUntil: 'load', timeout: 15000 }).catch(() => {});
           await new Promise(r => setTimeout(r, 500));
