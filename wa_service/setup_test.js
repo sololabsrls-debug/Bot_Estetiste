@@ -4,7 +4,7 @@
  * (dalla cartella wa_service)
  */
 const { Client, RemoteAuth } = require('whatsapp-web.js');
-const { MongoStore } = require('wwebjs-mongo');
+const NormalizedMongoStore = require('./src/normalizedMongoStore');
 const mongoose = require('mongoose');
 const qrcode = require('qrcode');
 const path = require('path');
@@ -12,13 +12,11 @@ const os = require('os');
 const fs = require('fs');
 const { execSync } = require('child_process');
 
-// Carica .env se esiste
 try { require('dotenv').config({ path: path.join(__dirname, '..', '.env') }); } catch(e) {}
 
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://DbEstetiste:Cubolorenzo2003!@cluster0.j03xl7t.mongodb.net/?appName=Cluster0';
 const TENANT_ID = process.argv[2] || 'test-locale';
 
-// Cerca Chrome/Edge di sistema su Windows
 function findSystemChrome() {
   const candidates = [
     process.env.CHROME_PATH,
@@ -39,17 +37,19 @@ console.log('');
 console.log('=== WhatsApp Setup Test ===');
 console.log('TenantId:', TENANT_ID);
 console.log('Node:', process.version);
-console.log('MongoDB:', MONGODB_URI.replace(/:([^@]+)@/, ':***@'));
 console.log('');
 
 async function main() {
+  // dataPath univoco per ogni run: zero possibilita di dati stale
+  const dataPath = path.join(os.tmpdir(), 'wa_setup_' + Date.now());
+  fs.mkdirSync(dataPath, { recursive: true });
+
   console.log('1. Connessione MongoDB...');
   await mongoose.connect(MONGODB_URI);
   console.log('   OK');
 
-  const store = new MongoStore({ mongoose });
+  const store = new NormalizedMongoStore({ mongoose });
 
-  // Monkey-patch inject per gestire il reload di WhatsApp Web al primo avvio
   const _origInject = Client.prototype.inject;
   Client.prototype.inject = async function() {
     for (let attempt = 0; attempt < 5; attempt++) {
@@ -64,7 +64,6 @@ async function main() {
           try {
             const url = await this.pupPage.url().catch(() => '');
             if (url.includes('post_logout') || msg === 'auth timeout') {
-              console.log('   Ricarico WhatsApp Web...');
               await this.pupPage.goto('https://web.whatsapp.com/', { waitUntil: 'load', timeout: 30000 }).catch(() => {});
             } else {
               await this.pupPage.waitForNavigation({ waitUntil: 'load', timeout: 15000 }).catch(() => {});
@@ -76,37 +75,62 @@ async function main() {
     }
   };
 
+  const executablePath = findSystemChrome();
+
   const client = new Client({
-    authStrategy: new RemoteAuth({ clientId: TENANT_ID, store, backupSyncIntervalMs: 60000 }),
+    authStrategy: new RemoteAuth({
+      clientId: TENANT_ID,
+      store,
+      backupSyncIntervalMs: 60000,
+      dataPath,
+    }),
     puppeteer: {
       headless: false,
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--window-size=1200,800'],
+      executablePath,
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-blink-features=AutomationControlled',
+        '--window-size=1200,800',
+      ],
     },
   });
 
   client.on('qr', async (qr) => {
-    console.log('4. QR ricevuto! Generazione immagine...');
+    console.log('\n2. QR ricevuto!');
     const qrPath = path.join(os.tmpdir(), `wa_qr_${TENANT_ID}.png`);
     await qrcode.toFile(qrPath, qr, { width: 400, margin: 2 });
     console.log('   QR salvato in:', qrPath);
-    try { execSync(`start "" "${qrPath}"`, { shell: true }); console.log('   Immagine aperta.'); }
-    catch(e) { console.log('   Apri manualmente:', qrPath); }
-    console.log('   WhatsApp > Impostazioni > Dispositivi collegati > Collega dispositivo');
-    console.log('   In attesa della scansione...');
+    try { execSync(`start "" "${qrPath}"`, { shell: true }); } catch(e) {}
+    console.log('   Scansiona: WhatsApp > Impostazioni > Dispositivi collegati > Collega dispositivo');
   });
 
-  client.on('authenticated', () => console.log('\n   Autenticato!'));
-  client.on('ready', () => { console.log('\n=== CONNESSO! ==='); process.exit(0); });
+  client.on('authenticated', () => console.log('3. Autenticato!'));
+
+  client.on('ready', () => {
+    console.log('4. CONNESSO! Salvataggio sessione su MongoDB (attendere ~70 sec)...');
+  });
+
+  client.on('remote_session_saved', () => {
+    console.log('\n=== SESSIONE SALVATA SU MONGODB! Puoi chiudere. ===\n');
+    try { fs.rmSync(dataPath, { recursive: true, force: true }); } catch(e) {}
+    process.exit(0);
+  });
+
   client.on('auth_failure', (msg) => { console.error('Auth fallita:', msg); process.exit(1); });
 
-  console.log('3. Avvio client WhatsApp (attendere 30-60 sec)...');
+  process.on('unhandledRejection', (err) => {
+    const msg = (err && err.message) ? err.message : String(err || '');
+    const isSilent = msg.includes('Execution context') || msg.includes('Target closed') ||
+                     msg.includes('Session closed') || msg === 'auth timeout';
+    if (!isSilent) console.error('Errore non gestito:', msg);
+  });
+
+  console.log('\n2. Avvio client (attendere 30-60 sec)...');
   await client.initialize();
 }
 
 main().catch(err => {
-  console.error('');
-  console.error('=== ERRORE ===');
-  console.error(err.message);
-  console.error(err.stack);
-  console.error('');
+  console.error('\n=== ERRORE ===', err.message);
+  process.exit(1);
 });

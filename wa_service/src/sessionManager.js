@@ -10,7 +10,7 @@
  */
 
 const { Client, RemoteAuth } = require('whatsapp-web.js');
-const { MongoStore } = require('wwebjs-mongo');
+const NormalizedMongoStore = require('./normalizedMongoStore');
 const mongoose = require('mongoose');
 
 // Map<tenantId, { client, status, qrCode }>
@@ -46,7 +46,7 @@ async function getOrCreateSession(tenantId) {
 async function _createSession(tenantId) {
   await ensureMongoose();
 
-  const store = new MongoStore({ mongoose });
+  const store = new NormalizedMongoStore({ mongoose });
   const session = { client: null, status: 'initializing', qrCode: null };
   sessions.set(tenantId, session);
 

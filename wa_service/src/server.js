@@ -41,36 +41,56 @@ app.get('/setup/:tenantId/script', (req, res) => {
   // JS embedded direttamente nel PS — nessun download da Railway.
   // headless:true (nessuna finestra Chrome), QR salvato come PNG e aperto col visore immagini Windows.
   const setupJs = `const { Client, RemoteAuth } = require('whatsapp-web.js');
-const { MongoStore } = require('wwebjs-mongo');
 const mongoose = require('mongoose');
 const qrcode = require('qrcode');
 const path = require('path');
 const os = require('os');
+const fs = require('fs');
 const { execSync } = require('child_process');
 
-// Monkey-patch: inject() viene chiamato subito dopo page.goto(). Al primo avvio
-// (nessuna sessione) WhatsApp Web fa un reload via service worker che distrugge
-// il contesto Puppeteer. Aspettiamo che la navigazione finisca e riproviamo.
+// NormalizedMongoStore: usa path.basename come chiave cosi la sessione
+// salvata dal PC locale viene trovata correttamente su Railway (path diversi).
+class NormalizedMongoStore {
+  constructor({ mongoose }) { this.mongoose = mongoose; }
+  _key(s) { return path.basename(s) || s; }
+  async sessionExists(o) {
+    const k = this._key(o.session);
+    return !!(await this.mongoose.connection.db.collection('whatsapp-' + k + '.files').countDocuments());
+  }
+  async save(o) {
+    const k = this._key(o.session);
+    const bucket = new this.mongoose.mongo.GridFSBucket(this.mongoose.connection.db, { bucketName: 'whatsapp-' + k });
+    await new Promise((res, rej) => fs.createReadStream(o.session + '.zip').pipe(bucket.openUploadStream(k + '.zip')).on('error', rej).on('close', res));
+    const docs = await bucket.find({ filename: k + '.zip' }).toArray();
+    if (docs.length > 1) { const old = docs.reduce((a, b) => a.uploadDate < b.uploadDate ? a : b); await bucket.delete(old._id); }
+  }
+  async extract(o) {
+    const k = this._key(o.session);
+    const bucket = new this.mongoose.mongo.GridFSBucket(this.mongoose.connection.db, { bucketName: 'whatsapp-' + k });
+    return new Promise((res, rej) => bucket.openDownloadStreamByName(k + '.zip').pipe(fs.createWriteStream(o.path)).on('error', rej).on('close', res));
+  }
+  async delete(o) {
+    const k = this._key(o.session);
+    const bucket = new this.mongoose.mongo.GridFSBucket(this.mongoose.connection.db, { bucketName: 'whatsapp-' + k });
+    const docs = await bucket.find({ filename: k + '.zip' }).toArray();
+    for (const d of docs) await bucket.delete(d._id);
+  }
+}
+
 const _origInject = Client.prototype.inject;
 Client.prototype.inject = async function() {
   for (let attempt = 0; attempt < 5; attempt++) {
     try {
       return await _origInject.call(this);
     } catch(err) {
-      // err puo' essere un Error object OPPURE una stringa ('auth timeout')
       const msg = (err && err.message) ? err.message : String(err || '');
-      const isCtxDestroyed = msg.includes('Execution context was destroyed');
-      const isTargetClosed = msg.includes('Target closed') || msg.includes('Session closed');
-      const isAuthTimeout  = msg === 'auth timeout';
-
-      if ((isCtxDestroyed || isTargetClosed || isAuthTimeout) && attempt < 4) {
+      const isRetryable = msg.includes('Execution context was destroyed') ||
+        msg.includes('Target closed') || msg.includes('Session closed') || msg === 'auth timeout';
+      if (isRetryable && attempt < 4) {
         console.log('  WhatsApp Web si sta ricaricando, attendere...');
         try {
-          // Se siamo su post_logout=1 o c'e' stato auth timeout,
-          // navighiamo esplicitamente invece di aspettare (la pagina non cambia da sola)
           const url = await this.pupPage.url().catch(() => '');
-          if (url.includes('post_logout') || isAuthTimeout) {
-            console.log('  Ricarico WhatsApp Web...');
+          if (url.includes('post_logout') || msg === 'auth timeout') {
             await this.pupPage.goto('https://web.whatsapp.com/', { waitUntil: 'load', timeout: 30000 }).catch(() => {});
           } else {
             await this.pupPage.waitForNavigation({ waitUntil: 'load', timeout: 15000 }).catch(() => {});
@@ -85,27 +105,33 @@ Client.prototype.inject = async function() {
 };
 
 async function main() {
-  // Forza chiusura Chrome residui e cancella sessione locale stale
-  try { execSync('taskkill /F /IM chrome.exe /T 2>nul', { shell: true }); } catch(e) {}
-  await new Promise(r => setTimeout(r, 2000));
-  const fs = require('fs');
-  const localAuth = path.join(__dirname, '.wwebjs_auth');
-  try {
-    if (fs.existsSync(localAuth)) {
-      fs.rmSync(localAuth, { recursive: true, force: true });
-      console.log('  Sessione locale precedente rimossa.');
-    }
-  } catch(e) { console.log('  Avviso: impossibile rimuovere sessione locale:', e.message); }
+  // dataPath univoco per ogni run: zero possibilita di dati stale
+  const dataPath = path.join(os.tmpdir(), 'wa_setup_' + Date.now());
+  fs.mkdirSync(dataPath, { recursive: true });
+
+  // Trova Chrome/Edge installato sul PC (meno rilevato come bot rispetto a Chromium bundled)
+  function findChrome() {
+    const candidates = [
+      'C:\\\\Program Files\\\\Google\\\\Chrome\\\\Application\\\\chrome.exe',
+      'C:\\\\Program Files (x86)\\\\Google\\\\Chrome\\\\Application\\\\chrome.exe',
+      path.join(os.homedir(), 'AppData\\\\Local\\\\Google\\\\Chrome\\\\Application\\\\chrome.exe'),
+      'C:\\\\Program Files\\\\Microsoft\\\\Edge\\\\Application\\\\msedge.exe',
+      path.join(os.homedir(), 'AppData\\\\Local\\\\Microsoft\\\\Edge\\\\Application\\\\msedge.exe'),
+    ];
+    for (const p of candidates) { try { if (fs.existsSync(p)) return p; } catch(e) {} }
+    return undefined;
+  }
 
   console.log('  Connessione database...');
   await mongoose.connect('${mongoUriRaw}');
-  const store = new MongoStore({ mongoose });
+  const store = new NormalizedMongoStore({ mongoose });
 
   const client = new Client({
-    authStrategy: new RemoteAuth({ clientId: '${tenantId}', store, backupSyncIntervalMs: 60000 }),
+    authStrategy: new RemoteAuth({ clientId: '${tenantId}', store, backupSyncIntervalMs: 60000, dataPath }),
     puppeteer: {
       headless: false,
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--window-size=1200,800'],
+      executablePath: findChrome(),
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-blink-features=AutomationControlled', '--window-size=1200,800'],
     },
   });
 
@@ -130,6 +156,7 @@ async function main() {
   client.on('remote_session_saved', () => {
     console.log('  Sessione salvata correttamente! Puoi chiudere questa finestra.');
     console.log('');
+    try { fs.rmSync(dataPath, { recursive: true, force: true }); } catch(e) {}
     process.exit(0);
   });
 
