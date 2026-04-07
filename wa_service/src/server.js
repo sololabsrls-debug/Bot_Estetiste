@@ -39,11 +39,14 @@ app.get('/setup/:tenantId/script', (req, res) => {
   const mongoUriRaw = process.env.MONGODB_URI || '';
 
   // JS embedded direttamente nel PS — nessun download da Railway.
-  // Stesso approccio del vecchio script che funzionava (qrcode-terminal nel terminale).
+  // headless:true (nessuna finestra Chrome), QR salvato come PNG e aperto col visore immagini Windows.
   const setupJs = `const { Client, RemoteAuth } = require('whatsapp-web.js');
 const { MongoStore } = require('wwebjs-mongo');
 const mongoose = require('mongoose');
-const qrcode = require('qrcode-terminal');
+const qrcode = require('qrcode');
+const path = require('path');
+const os = require('os');
+const { execSync } = require('child_process');
 
 async function main() {
   console.log('  Connessione database...');
@@ -51,29 +54,33 @@ async function main() {
   const store = new MongoStore({ mongoose });
   const client = new Client({
     authStrategy: new RemoteAuth({ clientId: '${tenantId}', store, backupSyncIntervalMs: 60000 }),
-    puppeteer: { args: ['--no-sandbox', '--disable-setuid-sandbox'], headless: false },
+    puppeteer: { args: ['--no-sandbox', '--disable-setuid-sandbox'], headless: true },
   });
-  client.on('qr', (qr) => {
+  client.on('qr', async (qr) => {
+    const qrPath = path.join(os.tmpdir(), 'wa_qr_${tenantId}.png');
+    await qrcode.toFile(qrPath, qr, { width: 400, margin: 2 });
     console.log('');
+    console.log('  QR Code generato! Apertura immagine...');
     console.log('  Scansiona il QR con WhatsApp:');
-    console.log('  Apri WhatsApp > Menu > Dispositivi collegati > Collega dispositivo');
+    console.log('  Apri WhatsApp > Impostazioni > Dispositivi collegati > Collega dispositivo');
+    console.log('  (File: ' + qrPath + ')');
     console.log('');
-    qrcode.generate(qr, { small: true });
+    try { execSync('start "" "' + qrPath + '"', { shell: true }); } catch(e) {}
   });
   client.on('ready', () => {
     console.log('');
-    console.log('  CONNESSO! WhatsApp collegato ai promemoria.');
-    console.log('  Questa finestra si chiudera in 10 secondi...');
-    setTimeout(() => process.exit(0), 10000);
+    console.log('  ✓ CONNESSO! WhatsApp collegato correttamente ai promemoria.');
+    console.log('');
+    process.exit(0);
   });
   client.on('auth_failure', () => {
     console.log('  Autenticazione fallita. Richiudi e riprova.');
     process.exit(1);
   });
-  console.log('  Avvio WhatsApp Web (attendere 30-60 secondi)...');
+  console.log('  Avvio in corso (attendere 30-60 secondi)...');
   await client.initialize();
 }
-main().catch(err => { console.error('  Errore:', err.message); process.exit(1); });`;
+main().catch(err => { console.error('  Errore:', err.message); });`;
 
   const psScript = `# WhatsApp Setup Tool - Gestionale Estetiste
 $setupDir = "$env:TEMP\\wa_setup_${tenantId}"
@@ -112,7 +119,7 @@ New-Item -ItemType Directory -Force -Path $setupDir | Out-Null
 Set-Location $setupDir
 
 # Passo 3: Scrivi package.json (senza BOM)
-$pkgJson = '{"name":"wa-setup","version":"1.0.0","dependencies":{"whatsapp-web.js":"1.26.0","wwebjs-mongo":"^1.1.0","mongoose":"^8.3.2","qrcode-terminal":"^0.12.0"}}'
+$pkgJson = '{"name":"wa-setup","version":"1.0.0","dependencies":{"whatsapp-web.js":"1.26.0","wwebjs-mongo":"^1.1.0","mongoose":"^8.3.2","qrcode":"^1.5.4"}}'
 [System.IO.File]::WriteAllText("$setupDir\\package.json", $pkgJson, (New-Object System.Text.UTF8Encoding $false))
 
 # Passo 4: Scrivi setup.js (senza BOM) — codice embedded, nessun download
@@ -134,9 +141,12 @@ Write-Host "  Installazione completata!" -ForegroundColor Green
 # Passo 6: Avvia
 Write-Host ""
 Write-Host "  Avvio in corso (attendere 30-60 secondi)..." -ForegroundColor Cyan
-Write-Host "  Apparira una finestra Chrome: scansiona il QR con WhatsApp." -ForegroundColor White
+Write-Host "  Si aprira automaticamente il QR Code nel visore immagini." -ForegroundColor White
+Write-Host "  Scansionalo con WhatsApp: Impostazioni > Dispositivi collegati > Collega dispositivo" -ForegroundColor White
 Write-Host ""
-node setup.js`;
+node setup.js
+Write-Host ""
+Read-Host "  Premi INVIO per chiudere"`;
 
   const b64 = Buffer.from(psScript, 'utf8').toString('base64');
   const tmpPs = `wa_run_${tenantId}.ps1`;
