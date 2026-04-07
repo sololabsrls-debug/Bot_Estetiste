@@ -99,7 +99,7 @@ async function main() {
   } catch(e) {}
 
   const client = new Client({
-    authStrategy: new RemoteAuth({ clientId: '${tenantId}', store, backupSyncIntervalMs: 10000, dataPath: path.join(os.tmpdir(), 'wa_auth') }),
+    authStrategy: new RemoteAuth({ clientId: '${tenantId}', store, backupSyncIntervalMs: 60000, dataPath: path.join(os.tmpdir(), 'wa_auth') }),
     puppeteer: {
       headless: false,
       args: ['--no-sandbox', '--disable-setuid-sandbox', '--window-size=1200,800'],
@@ -120,7 +120,7 @@ async function main() {
 
   client.on('ready', () => {
     console.log('');
-    console.log('  CONNESSO! Salvataggio sessione in corso (attendere ~15 secondi)...');
+    console.log('  CONNESSO! Salvataggio sessione in corso (attendere ~70 secondi)...');
     console.log('');
   });
 
@@ -190,11 +190,11 @@ if (-not $nodePath) {
 }
 
 # Passo 2: Chiudi Chrome residui e pulisci cartella
-# (senza questo, Remove-Item fallisce silenziosamente se Chrome ha file bloccati)
 Stop-Process -Name "chrome" -Force -ErrorAction SilentlyContinue
 Stop-Process -Name "node" -Force -ErrorAction SilentlyContinue
-Start-Sleep -Seconds 2
-if (Test-Path $setupDir) { Remove-Item $setupDir -Recurse -Force }
+Start-Sleep -Seconds 4
+Set-Location $env:TEMP
+if (Test-Path $setupDir) { Remove-Item $setupDir -Recurse -Force -ErrorAction SilentlyContinue }
 New-Item -ItemType Directory -Force -Path $setupDir | Out-Null
 Set-Location $setupDir
 
