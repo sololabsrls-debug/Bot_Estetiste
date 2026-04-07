@@ -5,6 +5,7 @@
  * Endpoints:
  *   GET  /health                   → { status: 'ok' }
  *   GET  /setup/:tenantId/status   → { status: 'connected'|'qr_pending'|'disconnected'|'initializing'|'not_started' }
+ *   GET  /setup/:tenantId/qr       → PNG QR code (no auth, for Lovable frontend)
  *   GET  /status/:tenantId         → { status: ... }  [requires X-API-Key]
  *   GET  /qr/:tenantId             → PNG QR code      [requires X-API-Key]
  *   POST /send                     → { success: true } [requires X-API-Key]
@@ -30,6 +31,22 @@ app.get('/setup/:tenantId/status', (req, res) => {
   const { sessions } = require('./sessionManager');
   const session = sessions.get(req.params.tenantId);
   res.json({ status: session ? session.status : 'not_started' });
+});
+
+// ── Setup: QR pubblico per Lovable (no auth) ─────────────────────
+app.get('/setup/:tenantId/qr', async (req, res) => {
+  try {
+    const { sessions } = require('./sessionManager');
+    const session = sessions.get(req.params.tenantId);
+    if (!session || session.status !== 'qr_pending' || !session.qrCode) {
+      return res.status(404).json({ error: 'No QR available', status: session ? session.status : 'not_started' });
+    }
+    const buf = await qrcode.toBuffer(session.qrCode);
+    res.set('Content-Type', 'image/png');
+    res.send(buf);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ── Auth middleware ────────────────────────────────────────────────
