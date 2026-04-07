@@ -57,15 +57,26 @@ Client.prototype.inject = async function() {
     try {
       return await _origInject.call(this);
     } catch(err) {
-      const isRetryable = err && err.message && (
-        err.message.includes('Execution context was destroyed') ||
-        err.message.includes('Target closed') ||
-        err.message.includes('Session closed')
-      );
-      if (isRetryable && attempt < 4) {
+      // err puo' essere un Error object OPPURE una stringa ('auth timeout')
+      const msg = (err && err.message) ? err.message : String(err || '');
+      const isCtxDestroyed = msg.includes('Execution context was destroyed');
+      const isTargetClosed = msg.includes('Target closed') || msg.includes('Session closed');
+      const isAuthTimeout  = msg === 'auth timeout';
+
+      if ((isCtxDestroyed || isTargetClosed || isAuthTimeout) && attempt < 4) {
         console.log('  WhatsApp Web si sta ricaricando, attendere...');
-        await this.pupPage.waitForNavigation({ waitUntil: 'load', timeout: 15000 }).catch(() => {});
-        await new Promise(r => setTimeout(r, 500));
+        try {
+          // Se siamo su post_logout=1 o c'e' stato auth timeout,
+          // navighiamo esplicitamente invece di aspettare (la pagina non cambia da sola)
+          const url = await this.pupPage.url().catch(() => '');
+          if (url.includes('post_logout') || isAuthTimeout) {
+            console.log('  Ricarico WhatsApp Web...');
+            await this.pupPage.goto('https://web.whatsapp.com/', { waitUntil: 'load', timeout: 30000 }).catch(() => {});
+          } else {
+            await this.pupPage.waitForNavigation({ waitUntil: 'load', timeout: 15000 }).catch(() => {});
+          }
+        } catch(navErr) {}
+        await new Promise(r => setTimeout(r, 1000));
       } else {
         throw err;
       }
@@ -114,12 +125,12 @@ async function main() {
   // framenavigated in modo asincrono. Se fallisce, e' unhandled rejection che
   // in Node.js v22 termina il processo. Lo intercettiamo e lo ignoriamo.
   process.on('unhandledRejection', (err) => {
-    const msg = err && err.message ? err.message : String(err);
-    if (msg.includes('Execution context') || msg.includes('Target closed') || msg.includes('Session closed')) {
-      // inject() fallito dal framenavigated handler — ignorato, il retry interno riprova
-    } else {
-      console.error('  Errore:', msg);
-    }
+    // Impedisce che Node.js v22 termini il processo su rifiuti non gestiti.
+    // Questi errori vengono dai listener framenavigated asincroni di wwebjs.
+    const msg = (err && err.message) ? err.message : String(err || '');
+    const isSilent = msg.includes('Execution context') || msg.includes('Target closed') ||
+                     msg.includes('Session closed') || msg === 'auth timeout';
+    if (!isSilent) console.error('  Errore non gestito:', msg);
   });
 
   client.on('disconnected', (reason) => {

@@ -56,15 +56,21 @@ async function main() {
       try {
         return await _origInject.call(this);
       } catch(err) {
-        const isRetryable = err && err.message && (
-          err.message.includes('Execution context was destroyed') ||
-          err.message.includes('Target closed') ||
-          err.message.includes('Session closed')
-        );
+        const msg = (err && err.message) ? err.message : String(err || '');
+        const isRetryable = msg.includes('Execution context was destroyed') ||
+          msg.includes('Target closed') || msg.includes('Session closed') || msg === 'auth timeout';
         if (isRetryable && attempt < 4) {
           console.log('   WhatsApp Web si sta ricaricando, attendere...');
-          await this.pupPage.waitForNavigation({ waitUntil: 'load', timeout: 15000 }).catch(() => {});
-          await new Promise(r => setTimeout(r, 500));
+          try {
+            const url = await this.pupPage.url().catch(() => '');
+            if (url.includes('post_logout') || msg === 'auth timeout') {
+              console.log('   Ricarico WhatsApp Web...');
+              await this.pupPage.goto('https://web.whatsapp.com/', { waitUntil: 'load', timeout: 30000 }).catch(() => {});
+            } else {
+              await this.pupPage.waitForNavigation({ waitUntil: 'load', timeout: 15000 }).catch(() => {});
+            }
+          } catch(e) {}
+          await new Promise(r => setTimeout(r, 1000));
         } else { throw err; }
       }
     }
