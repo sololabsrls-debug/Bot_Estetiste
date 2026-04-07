@@ -359,7 +359,7 @@ async def _send_reminder_day_before():
             continue
 
         tenant_id = tenant["id"]
-        phone = client["whatsapp_phone"]
+        phone = client["whatsapp_phone"].lstrip("+")
         client_name = client.get("name") or ""
         service_name = (
             appt.get("service", {}).get("name", "Appuntamento")
