@@ -1,5 +1,5 @@
 /**
- * Anti-ban utilities for whatsapp-web.js.
+ * Anti-ban utilities for Baileys.
  * Simulates human behavior: typing indicator + random delay before sending.
  */
 
@@ -15,23 +15,21 @@ function randomDelay(minMs = 2000, maxMs = 5000) {
 
 /**
  * Sends a WhatsApp message with anti-ban measures:
- * 1. Shows typing indicator for 1.5 seconds
- * 2. Waits a random delay (2-5 seconds)
+ * 1. Shows typing indicator for 1.5-2.5 seconds
+ * 2. Waits a random delay
  * 3. Sends the message
- * 4. Clears the typing state
+ * 4. Clears typing state
  *
- * @param {import('whatsapp-web.js').Client} client
+ * @param {import('@whiskeysockets/baileys').WASocket} sock
  * @param {string} phone - Phone number without +, e.g. "393401234567"
  * @param {string} message
  */
-async function sendWithAntibanMeasures(client, phone, message) {
-  const jid = `${phone}@c.us`;
-  const chat = await client.getChatById(jid);
-
-  await chat.sendStateTyping();
+async function sendWithAntibanMeasures(sock, phone, message) {
+  const jid = `${phone}@s.whatsapp.net`;
+  await sock.sendPresenceUpdate('composing', jid);
   await randomDelay(1500, 2500);
-  await client.sendMessage(jid, message);
-  await chat.clearState();
+  await sock.sendMessage(jid, { text: message });
+  await sock.sendPresenceUpdate('paused', jid);
 }
 
 module.exports = { randomDelay, sendWithAntibanMeasures };
