@@ -313,9 +313,8 @@ async def _send_reminder_day_before():
     """
     Trova appuntamenti con start_at tra 23h55 e 24h05 da adesso
     per tenant con wa_mode='unofficial'.
-    Invia promemoria via microservizio whatsapp-web.js.
-    Timing: se appuntamento è martedì alle 11:00, il promemoria
-    viene inviato lunedì alle 11:00 (±5 min).
+    Raggruppa per cliente: se un cliente ha più appuntamenti lo stesso giorno,
+    invia un unico messaggio con tutti elencati e marca tutti come inviati.
     """
     sb = get_supabase()
     now = datetime.now(timezone.utc)
@@ -342,6 +341,10 @@ async def _send_reminder_day_before():
 
     now_str = now.strftime("%Y-%m-%d %H:%M")
 
+    # Raccogli i clienti da processare (skip già inviati o non validi)
+    # chiave: (tenant_id, client_id) → dati cliente + primo appuntamento trigger
+    to_process: dict[tuple, dict] = {}
+
     for appt in response.data:
         notes = appt.get("notes") or ""
         if "reminder_day_before" in notes:
@@ -358,33 +361,98 @@ async def _send_reminder_day_before():
         if not client.get("whatsapp_phone"):
             continue
 
-        tenant_id = tenant["id"]
-        phone = client["whatsapp_phone"].lstrip("+")
-        client_name = client.get("name") or ""
-        service_name = (
-            appt.get("service", {}).get("name", "Appuntamento")
-            if appt.get("service") else "Appuntamento"
-        )
-        start_at = datetime.fromisoformat(appt["start_at"].replace("Z", "+00:00"))
-        time_str = start_at.astimezone(ROME_TZ).strftime("%H:%M")
+        key = (tenant["id"], client["id"])
+        if key not in to_process:
+            to_process[key] = {"client": client, "tenant": tenant, "trigger_appt": appt}
 
-        message = (
-            f"Ciao {client_name}!\n\n"
-            f"Ti ricordiamo il tuo appuntamento per *{service_name}* "
-            f"domani alle *{time_str}*.\n\n"
-            f"Ti aspettiamo! 😊"
-        )
+    for (tenant_id, client_id), data in to_process.items():
+        client = data["client"]
+        tenant = data["tenant"]
+        trigger_appt = data["trigger_appt"]
+
+        # Calcola il giorno dell'appuntamento trigger in Europe/Rome
+        trigger_start = datetime.fromisoformat(trigger_appt["start_at"].replace("Z", "+00:00"))
+        appt_day = trigger_start.astimezone(ROME_TZ).date()
+        day_start_utc = ROME_TZ.localize(
+            datetime.combine(appt_day, datetime.min.time())
+        ).astimezone(timezone.utc)
+        day_end_utc = ROME_TZ.localize(
+            datetime.combine(appt_day + timedelta(days=1), datetime.min.time())
+        ).astimezone(timezone.utc)
+
+        # Recupera TUTTI gli appuntamenti del cliente in quel giorno
+        try:
+            all_appts_resp = (
+                sb.table("appointments")
+                .select("id, start_at, notes, service:services(name)")
+                .in_("status", ["pending", "confirmed"])
+                .eq("client_id", client_id)
+                .gte("start_at", day_start_utc.isoformat())
+                .lt("start_at", day_end_utc.isoformat())
+                .order("start_at")
+                .execute()
+            )
+        except Exception as e:
+            logger.error(f"Failed to fetch all-day appointments for client {client_id}: {e}")
+            continue
+
+        all_appts = all_appts_resp.data
+        # Filtra quelli che non hanno già ricevuto il promemoria
+        appts_to_notify = [a for a in all_appts if "reminder_day_before" not in (a.get("notes") or "")]
+        if not appts_to_notify:
+            continue
+
+        client_name = client.get("name") or ""
+        phone = client["whatsapp_phone"].lstrip("+")
+
+        if len(appts_to_notify) == 1:
+            a = appts_to_notify[0]
+            service_name = (
+                a.get("service", {}).get("name", "Appuntamento")
+                if a.get("service") else "Appuntamento"
+            )
+            start_at = datetime.fromisoformat(a["start_at"].replace("Z", "+00:00"))
+            time_str = start_at.astimezone(ROME_TZ).strftime("%H:%M")
+            message = (
+                f"Ciao {client_name}!\n\n"
+                f"Ti ricordiamo il tuo appuntamento per *{service_name}* "
+                f"domani alle *{time_str}*.\n\n"
+                f"Ti aspettiamo! 😊"
+            )
+        else:
+            lines = []
+            for a in appts_to_notify:
+                service_name = (
+                    a.get("service", {}).get("name", "Appuntamento")
+                    if a.get("service") else "Appuntamento"
+                )
+                start_at = datetime.fromisoformat(a["start_at"].replace("Z", "+00:00"))
+                time_str = start_at.astimezone(ROME_TZ).strftime("%H:%M")
+                lines.append(f"• *{service_name}* alle *{time_str}*")
+            message = (
+                f"Ciao {client_name}!\n\n"
+                f"Ti ricordiamo i tuoi appuntamenti per domani:\n"
+                + "\n".join(lines)
+                + "\n\nTi aspettiamo! 😊"
+            )
 
         success = await send_unofficial_message(tenant_id, phone, message)
         if success:
-            new_notes = f"{notes}\n[reminder_day_before:{now_str}]".strip()
-            sb.table("appointments").update({"notes": new_notes}).eq("id", appt["id"]).execute()
-            logger.info(f"Day-before reminder sent for appointment {appt['id']}")
+            # Marca tutti gli appuntamenti del giorno come notificati
+            tag = f"[reminder_day_before:{now_str}]"
+            for a in appts_to_notify:
+                old_notes = (a.get("notes") or "").strip()
+                new_notes = f"{old_notes}\n{tag}".strip()
+                sb.table("appointments").update({"notes": new_notes}).eq("id", a["id"]).execute()
+            logger.info(
+                f"Day-before reminder sent for client {client_id} "
+                f"({len(appts_to_notify)} appointments on {appt_day})"
+            )
         else:
-            logger.error(f"Failed to send day-before reminder for appointment {appt['id']}")
+            logger.error(f"Failed to send day-before reminder for client {client_id}")
             if _SENTRY:
                 sentry_sdk.capture_exception(
-                    Exception(f"WA unofficial send failed for appt {appt['id']}")
+                    Exception(f"WA unofficial send failed for client {client_id}")
                 )
 
 
