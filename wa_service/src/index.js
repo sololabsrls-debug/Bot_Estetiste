@@ -26,11 +26,6 @@ clearSessionKeys().then(() => {
   });
 });
 
-server.on('error', (err) => {
-  console.error('Server error:', err);
-  process.exit(1);
-});
-
 process.on('unhandledRejection', (err) => {
   console.error('Unhandled rejection (non-fatal):', err?.message || err);
 });
