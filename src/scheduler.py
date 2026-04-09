@@ -324,7 +324,7 @@ async def _send_booking_confirmation():
     """
     sb = get_supabase()
     now = datetime.now(timezone.utc)
-    window_start = now - timedelta(minutes=6)
+    window_start = now - timedelta(minutes=15)
 
     GIORNI = ["lunedì", "martedì", "mercoledì", "giovedì", "venerdì", "sabato", "domenica"]
     MESI = ["gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno",
@@ -460,8 +460,8 @@ async def _send_reminder_day_before():
     """
     sb = get_supabase()
     now = datetime.now(timezone.utc)
-    target_start = now + timedelta(hours=23, minutes=55)
-    target_end = now + timedelta(hours=24, minutes=5)
+    target_start = now + timedelta(hours=23, minutes=52, seconds=30)
+    target_end = now + timedelta(hours=24, minutes=7, seconds=30)
 
     try:
         response = (
