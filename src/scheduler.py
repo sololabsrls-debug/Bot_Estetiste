@@ -350,7 +350,8 @@ async def _send_booking_confirmation():
 
     now_str = now.strftime("%Y-%m-%d %H:%M")
 
-    # Raggruppa per (tenant_id, client_id) — solo appuntamenti senza booking_confirm
+    # Raggruppa per (tenant_id, client_id, giorno_rome) — solo appuntamenti senza booking_confirm
+    # Un messaggio separato per ogni giorno
     to_process: dict[tuple, dict] = {}
     for appt in response.data:
         notes = appt.get("notes") or ""
@@ -365,7 +366,9 @@ async def _send_booking_confirmation():
         if not client.get("whatsapp_phone"):
             continue
 
-        key = (tenant["id"], client["id"])
+        start_at = datetime.fromisoformat(appt["start_at"].replace("Z", "+00:00")).astimezone(ROME_TZ)
+        day_key = start_at.date()
+        key = (tenant["id"], client["id"], day_key)
         if key not in to_process:
             to_process[key] = {"client": client, "tenant": tenant, "appts": []}
         to_process[key]["appts"].append(appt)
@@ -384,9 +387,8 @@ async def _send_booking_confirmation():
         groups.append(current)
         return groups
 
-    for (tenant_id, client_id), data in to_process.items():
+    for (tenant_id, client_id, day_key), data in to_process.items():
         client = data["client"]
-        tenant = data["tenant"]
         appts = data["appts"]
 
         first_name = _first_name(client.get("name") or "")
@@ -403,7 +405,7 @@ async def _send_booking_confirmation():
             data_str = f"{giorno} {start_at.day} {MESI[start_at.month - 1]}"
             time_str = start_at.strftime("%H:%M")
             message = (
-                f"Ciao {first_name}!\n\n"
+                f"Gentile {first_name},\n\n"
                 f"Il tuo appuntamento per *{service_name}* è stato prenotato "
                 f"per *{data_str} alle {time_str}*.\n\nTi aspettiamo! 😊"
             )
@@ -420,7 +422,7 @@ async def _send_booking_confirmation():
                 time_str = start_at.strftime("%H:%M")
                 lines.append(f"• *{services}* — {data_str} alle *{time_str}*")
             message = (
-                f"Ciao {first_name}!\n\n"
+                f"Gentile {first_name},\n\n"
                 f"I tuoi appuntamenti sono stati prenotati:\n"
                 + "\n".join(lines)
                 + "\n\nTi aspettiamo! 😊"
@@ -433,9 +435,9 @@ async def _send_booking_confirmation():
                 old_notes = (a.get("notes") or "").strip()
                 new_notes = f"{old_notes}\n{tag}".strip()
                 sb.table("appointments").update({"notes": new_notes}).eq("id", a["id"]).execute()
-            logger.info(f"Booking confirmation sent for client {client_id} ({len(appts)} appointments)")
+            logger.info(f"Booking confirmation sent for client {client_id} day {day_key} ({len(appts)} appointments)")
         else:
-            logger.error(f"Failed to send booking confirmation for client {client_id}")
+            logger.error(f"Failed to send booking confirmation for client {client_id} day {day_key}")
 
 
 # ─── Job: Reminder giorno prima (tenant unofficial) ──────────────
@@ -595,7 +597,7 @@ async def _send_reminder_day_before():
             service_name = a.get("service", {}).get("name", "Appuntamento") if a.get("service") else "Appuntamento"
             time_str = datetime.fromisoformat(a["start_at"].replace("Z", "+00:00")).astimezone(ROME_TZ).strftime("%H:%M")
             message = (
-                f"Ciao {first_name}!\n\n"
+                f"Gentile {first_name},\n\n"
                 f"Ti ricordiamo il tuo appuntamento per *{service_name}* "
                 f"domani alle *{time_str}*.\n\n"
                 f"Ti aspettiamo! 😊"
@@ -610,7 +612,7 @@ async def _send_reminder_day_before():
                 time_str = datetime.fromisoformat(group[0]["start_at"].replace("Z", "+00:00")).astimezone(ROME_TZ).strftime("%H:%M")
                 lines.append(f"• *{services}* alle *{time_str}*")
             message = (
-                f"Ciao {first_name}!\n\n"
+                f"Gentile {first_name},\n\n"
                 f"Ti ricordiamo i tuoi appuntamenti per domani:\n"
                 + "\n".join(lines)
                 + "\n\nTi aspettiamo! 😊"
