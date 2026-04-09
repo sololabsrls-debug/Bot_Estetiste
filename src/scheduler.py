@@ -407,7 +407,7 @@ async def _send_booking_confirmation():
             message = (
                 f"Gentile {first_name},\n\n"
                 f"Il tuo appuntamento per *{service_name}* è stato prenotato "
-                f"per *{data_str} alle {time_str}*.\n\nTi aspettiamo! 😊"
+                f"per *{data_str} alle {time_str}*.\n\nTi aspettiamo!"
             )
         else:
             lines = []
@@ -425,7 +425,7 @@ async def _send_booking_confirmation():
                 f"Gentile {first_name},\n\n"
                 f"I tuoi appuntamenti sono stati prenotati:\n"
                 + "\n".join(lines)
-                + "\n\nTi aspettiamo! 😊"
+                + "\n\nTi aspettiamo!"
             )
 
         success = await send_unofficial_message(tenant_id, phone, message)
@@ -600,7 +600,7 @@ async def _send_reminder_day_before():
                 f"Gentile {first_name},\n\n"
                 f"Ti ricordiamo il tuo appuntamento per *{service_name}* "
                 f"domani alle *{time_str}*.\n\n"
-                f"Ti aspettiamo! 😊"
+                f"Ti aspettiamo!"
             )
         else:
             lines = []
@@ -615,7 +615,7 @@ async def _send_reminder_day_before():
                 f"Gentile {first_name},\n\n"
                 f"Ti ricordiamo i tuoi appuntamenti per domani:\n"
                 + "\n".join(lines)
-                + "\n\nTi aspettiamo! 😊"
+                + "\n\nTi aspettiamo!"
             )
 
         success = await send_unofficial_message(tenant_id, phone, message)
