@@ -405,14 +405,51 @@ async def _send_reminder_day_before():
         client_name = client.get("name") or ""
         phone = client["whatsapp_phone"].lstrip("+")
 
-        if len(appts_to_notify) == 1:
-            a = appts_to_notify[0]
-            service_name = (
-                a.get("service", {}).get("name", "Appuntamento")
-                if a.get("service") else "Appuntamento"
+        # Raggruppa appuntamenti consecutivi (end_at di uno == start_at del successivo)
+        def build_groups(appts):
+            groups = []
+            current = [appts[0]]
+            for i in range(1, len(appts)):
+                prev_end = datetime.fromisoformat(appts[i-1]["end_at"].replace("Z", "+00:00"))
+                curr_start = datetime.fromisoformat(appts[i]["start_at"].replace("Z", "+00:00"))
+                if prev_end == curr_start:
+                    current.append(appts[i])
+                else:
+                    groups.append(current)
+                    current = [appts[i]]
+            groups.append(current)
+            return groups
+
+        # Recupera end_at per poter raggruppare
+        try:
+            appts_full_resp = (
+                sb.table("appointments")
+                .select("id, start_at, end_at, notes, service:services(name)")
+                .in_("status", ["pending", "confirmed"])
+                .eq("client_id", client_id)
+                .gte("start_at", day_start_utc.isoformat())
+                .lt("start_at", day_end_utc.isoformat())
+                .order("start_at")
+                .execute()
             )
-            start_at = datetime.fromisoformat(a["start_at"].replace("Z", "+00:00"))
-            time_str = start_at.astimezone(ROME_TZ).strftime("%H:%M")
+        except Exception as e:
+            logger.error(f"Failed to fetch full appointments for client {client_id}: {e}")
+            continue
+
+        appts_to_notify = [
+            a for a in appts_full_resp.data
+            if "reminder_day_before" not in (a.get("notes") or "")
+        ]
+        if not appts_to_notify:
+            continue
+
+        groups = build_groups(appts_to_notify)
+
+        if len(groups) == 1 and len(groups[0]) == 1:
+            # Singolo appuntamento
+            a = groups[0][0]
+            service_name = a.get("service", {}).get("name", "Appuntamento") if a.get("service") else "Appuntamento"
+            time_str = datetime.fromisoformat(a["start_at"].replace("Z", "+00:00")).astimezone(ROME_TZ).strftime("%H:%M")
             message = (
                 f"Ciao {client_name}!\n\n"
                 f"Ti ricordiamo il tuo appuntamento per *{service_name}* "
@@ -421,14 +458,13 @@ async def _send_reminder_day_before():
             )
         else:
             lines = []
-            for a in appts_to_notify:
-                service_name = (
-                    a.get("service", {}).get("name", "Appuntamento")
-                    if a.get("service") else "Appuntamento"
+            for group in groups:
+                services = " + ".join(
+                    a.get("service", {}).get("name", "Appuntamento") if a.get("service") else "Appuntamento"
+                    for a in group
                 )
-                start_at = datetime.fromisoformat(a["start_at"].replace("Z", "+00:00"))
-                time_str = start_at.astimezone(ROME_TZ).strftime("%H:%M")
-                lines.append(f"• *{service_name}* alle *{time_str}*")
+                time_str = datetime.fromisoformat(group[0]["start_at"].replace("Z", "+00:00")).astimezone(ROME_TZ).strftime("%H:%M")
+                lines.append(f"• *{services}* alle *{time_str}*")
             message = (
                 f"Ciao {client_name}!\n\n"
                 f"Ti ricordiamo i tuoi appuntamenti per domani:\n"
