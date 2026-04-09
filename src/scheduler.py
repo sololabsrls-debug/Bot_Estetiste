@@ -302,6 +302,94 @@ async def _send_reminder_1h():
                 sentry_sdk.capture_exception(e)
 
 
+# ─── Job: Conferma prenotazione (al momento della creazione) ─────
+
+
+def _job_booking_confirmation():
+    """Send booking confirmation message when a new appointment is created."""
+    try:
+        _run_async(_send_booking_confirmation())
+    except Exception as e:
+        logger.exception(f"Error in booking_confirmation job: {e}")
+        if _SENTRY:
+            sentry_sdk.capture_exception(e)
+
+
+async def _send_booking_confirmation():
+    """
+    Trova appuntamenti creati negli ultimi 6 minuti (tenant unofficial)
+    che non hanno ancora ricevuto la conferma di prenotazione.
+    Invia un messaggio con data e servizio dell'appuntamento.
+    """
+    sb = get_supabase()
+    now = datetime.now(timezone.utc)
+    window_start = now - timedelta(minutes=6)
+
+    try:
+        response = (
+            sb.table("appointments")
+            .select(
+                "id, start_at, notes, "
+                "client:clients(id, whatsapp_phone, name), "
+                "service:services(name), "
+                "tenant:tenants(id, wa_mode)"
+            )
+            .in_("status", ["pending", "confirmed"])
+            .gte("created_at", window_start.isoformat())
+            .execute()
+        )
+    except Exception as e:
+        logger.error(f"Booking confirmation query error: {e}")
+        return
+
+    now_str = now.strftime("%Y-%m-%d %H:%M")
+    GIORNI = ["lunedì", "martedì", "mercoledì", "giovedì", "venerdì", "sabato", "domenica"]
+    MESI = ["gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno",
+            "luglio", "agosto", "settembre", "ottobre", "novembre", "dicembre"]
+
+    for appt in response.data:
+        notes = appt.get("notes") or ""
+        if "booking_confirm" in notes:
+            continue
+
+        client = appt.get("client")
+        tenant = appt.get("tenant")
+        if not client or not tenant:
+            continue
+        if tenant.get("wa_mode") != "unofficial":
+            continue
+        if not client.get("whatsapp_phone"):
+            continue
+
+        phone = client["whatsapp_phone"].lstrip("+")
+        first_name = _first_name(client.get("name") or "")
+        service_name = (
+            appt.get("service", {}).get("name", "Appuntamento")
+            if appt.get("service") else "Appuntamento"
+        )
+
+        start_at = datetime.fromisoformat(appt["start_at"].replace("Z", "+00:00")).astimezone(ROME_TZ)
+        giorno = GIORNI[start_at.weekday()]
+        data_str = f"{giorno} {start_at.day} {MESI[start_at.month - 1]}"
+        time_str = start_at.strftime("%H:%M")
+
+        message = (
+            f"Ciao {first_name}!\n\n"
+            f"Il tuo appuntamento per *{service_name}* è stato prenotato "
+            f"per *{data_str} alle {time_str}*.\n\n"
+            f"Ti aspettiamo! 😊"
+        )
+
+        tenant_id = tenant["id"]
+        success = await send_unofficial_message(tenant_id, phone, message)
+        if success:
+            new_notes = f"{notes}\n[booking_confirm:{now_str}]".strip()
+            sb.table("appointments").update({"notes": new_notes}).eq("id", appt["id"]).execute()
+            logger.info(f"Booking confirmation sent for appointment {appt['id']}")
+        else:
+            logger.error(f"Failed to send booking confirmation for appointment {appt['id']}")
+
+
 # ─── Job: Reminder giorno prima (tenant unofficial) ──────────────
 
 
@@ -539,8 +627,17 @@ def start_scheduler():
         name="Day-before reminder (unofficial WA)",
     )
 
+    # Booking confirmation (unofficial WA tenants, ogni 5 minuti)
+    _scheduler.add_job(
+        _job_booking_confirmation,
+        "interval",
+        minutes=5,
+        id="booking_confirmation",
+        name="Booking confirmation (unofficial WA)",
+    )
+
     _scheduler.start()
-    logger.info("Scheduler started with 3 jobs: morning_confirmation (09:00), reminder_1h (every 5 min), reminder_day_before (every 5 min)")
+    logger.info("Scheduler started with 4 jobs: morning_confirmation (09:00), reminder_1h (every 5 min), reminder_day_before (every 5 min), booking_confirmation (every 5 min)")
 
 
 def stop_scheduler():
