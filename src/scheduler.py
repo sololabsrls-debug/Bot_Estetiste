@@ -319,23 +319,29 @@ async def _send_booking_confirmation():
     """
     Trova appuntamenti creati negli ultimi 6 minuti (tenant unofficial)
     che non hanno ancora ricevuto la conferma di prenotazione.
-    Invia un messaggio con data e servizio dell'appuntamento.
+    Raggruppa per cliente: se più appuntamenti sono stati creati insieme,
+    invia un unico messaggio con la stessa struttura del promemoria giorno prima.
     """
     sb = get_supabase()
     now = datetime.now(timezone.utc)
     window_start = now - timedelta(minutes=6)
 
+    GIORNI = ["lunedì", "martedì", "mercoledì", "giovedì", "venerdì", "sabato", "domenica"]
+    MESI = ["gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno",
+            "luglio", "agosto", "settembre", "ottobre", "novembre", "dicembre"]
+
     try:
         response = (
             sb.table("appointments")
             .select(
-                "id, start_at, notes, "
+                "id, start_at, end_at, notes, "
                 "client:clients(id, whatsapp_phone, name), "
                 "service:services(name), "
                 "tenant:tenants(id, wa_mode)"
             )
             .in_("status", ["pending", "confirmed"])
             .gte("created_at", window_start.isoformat())
+            .order("start_at")
             .execute()
         )
     except Exception as e:
@@ -343,15 +349,13 @@ async def _send_booking_confirmation():
         return
 
     now_str = now.strftime("%Y-%m-%d %H:%M")
-    GIORNI = ["lunedì", "martedì", "mercoledì", "giovedì", "venerdì", "sabato", "domenica"]
-    MESI = ["gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno",
-            "luglio", "agosto", "settembre", "ottobre", "novembre", "dicembre"]
 
+    # Raggruppa per (tenant_id, client_id) — solo appuntamenti senza booking_confirm
+    to_process: dict[tuple, dict] = {}
     for appt in response.data:
         notes = appt.get("notes") or ""
         if "booking_confirm" in notes:
             continue
-
         client = appt.get("client")
         tenant = appt.get("tenant")
         if not client or not tenant:
@@ -361,33 +365,77 @@ async def _send_booking_confirmation():
         if not client.get("whatsapp_phone"):
             continue
 
-        phone = client["whatsapp_phone"].lstrip("+")
+        key = (tenant["id"], client["id"])
+        if key not in to_process:
+            to_process[key] = {"client": client, "tenant": tenant, "appts": []}
+        to_process[key]["appts"].append(appt)
+
+    def build_groups(appts):
+        groups = []
+        current = [appts[0]]
+        for i in range(1, len(appts)):
+            prev_end = datetime.fromisoformat(appts[i-1]["end_at"].replace("Z", "+00:00"))
+            curr_start = datetime.fromisoformat(appts[i]["start_at"].replace("Z", "+00:00"))
+            if prev_end == curr_start:
+                current.append(appts[i])
+            else:
+                groups.append(current)
+                current = [appts[i]]
+        groups.append(current)
+        return groups
+
+    for (tenant_id, client_id), data in to_process.items():
+        client = data["client"]
+        tenant = data["tenant"]
+        appts = data["appts"]
+
         first_name = _first_name(client.get("name") or "")
-        service_name = (
-            appt.get("service", {}).get("name", "Appuntamento")
-            if appt.get("service") else "Appuntamento"
-        )
+        phone = client["whatsapp_phone"].lstrip("+")
 
-        start_at = datetime.fromisoformat(appt["start_at"].replace("Z", "+00:00")).astimezone(ROME_TZ)
-        giorno = GIORNI[start_at.weekday()]
-        data_str = f"{giorno} {start_at.day} {MESI[start_at.month - 1]}"
-        time_str = start_at.strftime("%H:%M")
+        groups = build_groups(appts)
 
-        message = (
-            f"Ciao {first_name}!\n\n"
-            f"Il tuo appuntamento per *{service_name}* è stato prenotato "
-            f"per *{data_str} alle {time_str}*.\n\n"
-            f"Ti aspettiamo! 😊"
-        )
+        if len(groups) == 1 and len(groups[0]) == 1:
+            # Singolo appuntamento
+            a = groups[0][0]
+            service_name = a.get("service", {}).get("name", "Appuntamento") if a.get("service") else "Appuntamento"
+            start_at = datetime.fromisoformat(a["start_at"].replace("Z", "+00:00")).astimezone(ROME_TZ)
+            giorno = GIORNI[start_at.weekday()]
+            data_str = f"{giorno} {start_at.day} {MESI[start_at.month - 1]}"
+            time_str = start_at.strftime("%H:%M")
+            message = (
+                f"Ciao {first_name}!\n\n"
+                f"Il tuo appuntamento per *{service_name}* è stato prenotato "
+                f"per *{data_str} alle {time_str}*.\n\nTi aspettiamo! 😊"
+            )
+        else:
+            lines = []
+            for group in groups:
+                services = " + ".join(
+                    a.get("service", {}).get("name", "Appuntamento") if a.get("service") else "Appuntamento"
+                    for a in group
+                )
+                start_at = datetime.fromisoformat(group[0]["start_at"].replace("Z", "+00:00")).astimezone(ROME_TZ)
+                giorno = GIORNI[start_at.weekday()]
+                data_str = f"{giorno} {start_at.day} {MESI[start_at.month - 1]}"
+                time_str = start_at.strftime("%H:%M")
+                lines.append(f"• *{services}* — {data_str} alle *{time_str}*")
+            message = (
+                f"Ciao {first_name}!\n\n"
+                f"I tuoi appuntamenti sono stati prenotati:\n"
+                + "\n".join(lines)
+                + "\n\nTi aspettiamo! 😊"
+            )
 
-        tenant_id = tenant["id"]
         success = await send_unofficial_message(tenant_id, phone, message)
         if success:
-            new_notes = f"{notes}\n[booking_confirm:{now_str}]".strip()
-            sb.table("appointments").update({"notes": new_notes}).eq("id", appt["id"]).execute()
-            logger.info(f"Booking confirmation sent for appointment {appt['id']}")
+            tag = f"[booking_confirm:{now_str}]"
+            for a in appts:
+                old_notes = (a.get("notes") or "").strip()
+                new_notes = f"{old_notes}\n{tag}".strip()
+                sb.table("appointments").update({"notes": new_notes}).eq("id", a["id"]).execute()
+            logger.info(f"Booking confirmation sent for client {client_id} ({len(appts)} appointments)")
         else:
-            logger.error(f"Failed to send booking confirmation for appointment {appt['id']}")
+            logger.error(f"Failed to send booking confirmation for client {client_id}")
 
 
 # ─── Job: Reminder giorno prima (tenant unofficial) ──────────────
