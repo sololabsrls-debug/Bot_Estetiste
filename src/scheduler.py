@@ -22,6 +22,12 @@ logger = logging.getLogger("BOT.scheduler")
 
 ROME_TZ = pytz.timezone("Europe/Rome")
 
+
+def _first_name(full_name: str) -> str:
+    """Restituisce l'ultima parola del nome (es. 'Torretti Monica' → 'Monica')."""
+    parts = (full_name or "").strip().split()
+    return parts[-1] if parts else full_name
+
 # Sentry (optional)
 try:
     import sentry_sdk
@@ -139,7 +145,7 @@ async def _send_morning_confirmations():
         if client_bot_enabled:
             # Bot attivo: invia messaggio interattivo con bottoni
             body = (
-                f"Ciao {client_name}!\n\n"
+                f"Ciao {_first_name(client_name)}!\n\n"
                 f"Ti ricordiamo il tuo appuntamento per "
                 f"*{service_name}* previsto per domani, *{time_str}*.\n\n"
                 f"Puoi confermare, cancellare o spostare:"
@@ -172,7 +178,7 @@ async def _send_morning_confirmations():
                             {
                                 "type": "body",
                                 "parameters": [
-                                    {"type": "text", "text": client_name},
+                                    {"type": "text", "text": _first_name(client_name)},
                                     {"type": "text", "text": service_name},
                                     {"type": "text", "text": time_str},
                                 ],
@@ -188,7 +194,7 @@ async def _send_morning_confirmations():
         else:
             # Bot non attivo: invia testo semplice senza bottoni
             body = (
-                f"Ciao {client_name}!\n\n"
+                f"Ciao {_first_name(client_name)}!\n\n"
                 f"Ti ricordiamo il tuo appuntamento per "
                 f"*{service_name}* domani, *{time_str}*."
             )
@@ -279,7 +285,7 @@ async def _send_reminder_1h():
 
         try:
             msg = (
-                f"Ciao {client_name}! \n\n"
+                f"Ciao {_first_name(client_name)}!\n\n"
                 f"Ti ricordiamo il tuo appuntamento per *{service_name}* "
                 f"tra circa 1 ora ({start_at.astimezone(ROME_TZ).strftime('%H:%M')}).\n\n"
                 f"Ti aspettiamo!"
@@ -445,13 +451,15 @@ async def _send_reminder_day_before():
 
         groups = build_groups(appts_to_notify)
 
+        first_name = _first_name(client_name)
+
         if len(groups) == 1 and len(groups[0]) == 1:
             # Singolo appuntamento
             a = groups[0][0]
             service_name = a.get("service", {}).get("name", "Appuntamento") if a.get("service") else "Appuntamento"
             time_str = datetime.fromisoformat(a["start_at"].replace("Z", "+00:00")).astimezone(ROME_TZ).strftime("%H:%M")
             message = (
-                f"Ciao {client_name}!\n\n"
+                f"Ciao {first_name}!\n\n"
                 f"Ti ricordiamo il tuo appuntamento per *{service_name}* "
                 f"domani alle *{time_str}*.\n\n"
                 f"Ti aspettiamo! 😊"
@@ -466,7 +474,7 @@ async def _send_reminder_day_before():
                 time_str = datetime.fromisoformat(group[0]["start_at"].replace("Z", "+00:00")).astimezone(ROME_TZ).strftime("%H:%M")
                 lines.append(f"• *{services}* alle *{time_str}*")
             message = (
-                f"Ciao {client_name}!\n\n"
+                f"Ciao {first_name}!\n\n"
                 f"Ti ricordiamo i tuoi appuntamenti per domani:\n"
                 + "\n".join(lines)
                 + "\n\nTi aspettiamo! 😊"
