@@ -406,7 +406,7 @@ async def _send_booking_confirmation():
             time_str = start_at.strftime("%H:%M")
             message = (
                 f"Gentile {first_name},\n\n"
-                f"Il tuo appuntamento per *{service_name}* è stato prenotato "
+                f"Il Suo appuntamento per *{service_name}* è stato prenotato "
                 f"per *{data_str} alle {time_str}*.\n\nTi aspettiamo!"
             )
         else:
@@ -423,9 +423,9 @@ async def _send_booking_confirmation():
                 lines.append(f"• *{services}* — {data_str} alle *{time_str}*")
             message = (
                 f"Gentile {first_name},\n\n"
-                f"I tuoi appuntamenti sono stati prenotati:\n"
+                f"I Suoi appuntamenti sono stati prenotati:\n"
                 + "\n".join(lines)
-                + "\n\nTi aspettiamo!"
+                + "\n\nLa aspettiamo!"
             )
 
         success = await send_unofficial_message(tenant_id, phone, message)
@@ -598,9 +598,9 @@ async def _send_reminder_day_before():
             time_str = datetime.fromisoformat(a["start_at"].replace("Z", "+00:00")).astimezone(ROME_TZ).strftime("%H:%M")
             message = (
                 f"Gentile {first_name},\n\n"
-                f"Ti ricordiamo il tuo appuntamento per *{service_name}* "
+                f"Le ricordiamo il Suo appuntamento per *{service_name}* "
                 f"domani alle *{time_str}*.\n\n"
-                f"Ti aspettiamo!"
+                f"La aspettiamo!"
             )
         else:
             lines = []
@@ -613,9 +613,9 @@ async def _send_reminder_day_before():
                 lines.append(f"• *{services}* alle *{time_str}*")
             message = (
                 f"Gentile {first_name},\n\n"
-                f"Ti ricordiamo i tuoi appuntamenti per domani:\n"
+                f"Le ricordiamo i Suoi appuntamenti per domani:\n"
                 + "\n".join(lines)
-                + "\n\nTi aspettiamo!"
+                + "\n\nLa aspettiamo!"
             )
 
         success = await send_unofficial_message(tenant_id, phone, message)
