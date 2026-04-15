@@ -89,13 +89,14 @@ async def _send_morning_confirmations():
         response = (
             sb.table("appointments")
             .select(
-                "id, start_at, status, notes, "
+                "id, start_at, status, notes, morning_confirm_sent_at, "
                 "client:clients(id, whatsapp_phone, name, bot_enabled, reminder_morning_enabled), "
                 "service:services(name), "
                 "staff:staff(name), "
                 "tenant:tenants(id, name, whatsapp_phone_number_id, whatsapp_access_token, wa_mode)"
             )
             .eq("status", "pending")
+            .is_("morning_confirm_sent_at", "null")
             .gte("start_at", tomorrow_start.isoformat())
             .lt("start_at", tomorrow_end.isoformat())
             .execute()
@@ -107,8 +108,7 @@ async def _send_morning_confirmations():
     now = datetime.now(timezone.utc)
 
     for appt in response.data:
-        notes = appt.get("notes") or ""
-        if "morning_confirm" in notes:
+        if appt.get("morning_confirm_sent_at"):
             continue
 
         client = appt.get("client")
@@ -208,8 +208,7 @@ async def _send_morning_confirmations():
                     sentry_sdk.capture_exception(e)
 
         if sent:
-            new_notes = f"{notes}\n[morning_confirm:{now.strftime('%Y-%m-%d %H:%M')}]".strip()
-            sb.table("appointments").update({"notes": new_notes}).eq("id", appt["id"]).execute()
+            sb.table("appointments").update({"morning_confirm_sent_at": now.isoformat()}).eq("id", appt["id"]).is_("morning_confirm_sent_at", "null").execute()
             logger.info(f"Morning confirmation sent for appointment {appt_id}")
 
 
@@ -237,13 +236,14 @@ async def _send_reminder_1h():
         response = (
             sb.table("appointments")
             .select(
-                "id, start_at, status, notes, "
+                "id, start_at, status, notes, reminder_1h_sent_at, "
                 "client:clients(id, whatsapp_phone, name, reminder_1h_enabled), "
                 "service:services(name), "
                 "staff:staff(name), "
                 "tenant:tenants(id, name, whatsapp_phone_number_id, whatsapp_access_token, wa_mode)"
             )
             .in_("status", ["confirmed"])
+            .is_("reminder_1h_sent_at", "null")
             .gte("start_at", target_start.isoformat())
             .lt("start_at", target_end.isoformat())
             .execute()
@@ -253,8 +253,7 @@ async def _send_reminder_1h():
         return
 
     for appt in response.data:
-        notes = appt.get("notes") or ""
-        if "reminder_1h" in notes:
+        if appt.get("reminder_1h_sent_at"):
             continue
 
         client = appt.get("client")
@@ -292,8 +291,7 @@ async def _send_reminder_1h():
             )
             await send_text_message(phone_number_id, access_token, to_phone, msg)
 
-            new_notes = f"{notes}\n[reminder_1h:{now.strftime('%Y-%m-%d %H:%M')}]".strip()
-            sb.table("appointments").update({"notes": new_notes}).eq("id", appt["id"]).execute()
+            sb.table("appointments").update({"reminder_1h_sent_at": now.isoformat()}).eq("id", appt["id"]).is_("reminder_1h_sent_at", "null").execute()
             logger.info(f"Reminder 1h sent for appointment {appt['id']}")
 
         except Exception as e:
@@ -334,12 +332,13 @@ async def _send_booking_confirmation():
         response = (
             sb.table("appointments")
             .select(
-                "id, start_at, end_at, notes, "
+                "id, start_at, end_at, notes, booking_confirm_sent_at, "
                 "client:clients(id, whatsapp_phone, name), "
                 "service:services(name), "
                 "tenant:tenants(id, wa_mode)"
             )
             .in_("status", ["pending", "confirmed"])
+            .is_("booking_confirm_sent_at", "null")
             .gte("created_at", window_start.isoformat())
             .order("start_at")
             .execute()
@@ -348,14 +347,11 @@ async def _send_booking_confirmation():
         logger.error(f"Booking confirmation query error: {e}")
         return
 
-    now_str = now.strftime("%Y-%m-%d %H:%M")
-
     # Raggruppa per (tenant_id, client_id, giorno_rome) — solo appuntamenti senza booking_confirm
     # Un messaggio separato per ogni giorno
     to_process: dict[tuple, dict] = {}
     for appt in response.data:
-        notes = appt.get("notes") or ""
-        if "booking_confirm" in notes:
+        if appt.get("booking_confirm_sent_at"):
             continue
         client = appt.get("client")
         tenant = appt.get("tenant")
@@ -430,11 +426,9 @@ async def _send_booking_confirmation():
 
         success = await send_unofficial_message(tenant_id, phone, message)
         if success:
-            tag = f"[booking_confirm:{now_str}]"
+            now_utc = datetime.now(timezone.utc).isoformat()
             for a in appts:
-                old_notes = (a.get("notes") or "").strip()
-                new_notes = f"{old_notes}\n{tag}".strip()
-                sb.table("appointments").update({"notes": new_notes}).eq("id", a["id"]).execute()
+                sb.table("appointments").update({"booking_confirm_sent_at": now_utc}).eq("id", a["id"]).is_("booking_confirm_sent_at", "null").execute()
             logger.info(f"Booking confirmation sent for client {client_id} day {day_key} ({len(appts)} appointments)")
         else:
             logger.error(f"Failed to send booking confirmation for client {client_id} day {day_key}")
@@ -469,12 +463,13 @@ async def _send_reminder_day_before():
         response = (
             sb.table("appointments")
             .select(
-                "id, start_at, notes, "
+                "id, start_at, notes, reminder_day_before_sent_at, "
                 "client:clients(id, whatsapp_phone, name, reminder_morning_enabled), "
                 "service:services(name), "
                 "tenant:tenants(id, wa_mode)"
             )
             .in_("status", ["pending", "confirmed"])
+            .is_("reminder_day_before_sent_at", "null")
             .gte("start_at", target_start.isoformat())
             .lt("start_at", target_end.isoformat())
             .execute()
@@ -483,15 +478,12 @@ async def _send_reminder_day_before():
         logger.error(f"Reminder day before query error: {e}")
         return
 
-    now_str = now.strftime("%Y-%m-%d %H:%M")
-
     # Raccogli i clienti da processare (skip già inviati o non validi)
     # chiave: (tenant_id, client_id) → dati cliente + primo appuntamento trigger
     to_process: dict[tuple, dict] = {}
 
     for appt in response.data:
-        notes = appt.get("notes") or ""
-        if "reminder_day_before" in notes:
+        if appt.get("reminder_day_before_sent_at"):
             continue
 
         client = appt.get("client")
@@ -528,7 +520,7 @@ async def _send_reminder_day_before():
         try:
             all_appts_resp = (
                 sb.table("appointments")
-                .select("id, start_at, notes, service:services(name)")
+                .select("id, start_at, notes, reminder_day_before_sent_at, service:services(name)")
                 .in_("status", ["pending", "confirmed"])
                 .eq("client_id", client_id)
                 .gte("start_at", day_start_utc.isoformat())
@@ -542,7 +534,7 @@ async def _send_reminder_day_before():
 
         all_appts = all_appts_resp.data
         # Filtra quelli che non hanno già ricevuto il promemoria
-        appts_to_notify = [a for a in all_appts if "reminder_day_before" not in (a.get("notes") or "")]
+        appts_to_notify = [a for a in all_appts if not a.get("reminder_day_before_sent_at")]
         if not appts_to_notify:
             continue
 
@@ -568,7 +560,7 @@ async def _send_reminder_day_before():
         try:
             appts_full_resp = (
                 sb.table("appointments")
-                .select("id, start_at, end_at, notes, service:services(name)")
+                .select("id, start_at, end_at, notes, reminder_day_before_sent_at, service:services(name)")
                 .in_("status", ["pending", "confirmed"])
                 .eq("client_id", client_id)
                 .gte("start_at", day_start_utc.isoformat())
@@ -582,7 +574,7 @@ async def _send_reminder_day_before():
 
         appts_to_notify = [
             a for a in appts_full_resp.data
-            if "reminder_day_before" not in (a.get("notes") or "")
+            if not a.get("reminder_day_before_sent_at")
         ]
         if not appts_to_notify:
             continue
@@ -620,12 +612,9 @@ async def _send_reminder_day_before():
 
         success = await send_unofficial_message(tenant_id, phone, message)
         if success:
-            # Marca tutti gli appuntamenti del giorno come notificati
-            tag = f"[reminder_day_before:{now_str}]"
+            now_utc = datetime.now(timezone.utc).isoformat()
             for a in appts_to_notify:
-                old_notes = (a.get("notes") or "").strip()
-                new_notes = f"{old_notes}\n{tag}".strip()
-                sb.table("appointments").update({"notes": new_notes}).eq("id", a["id"]).execute()
+                sb.table("appointments").update({"reminder_day_before_sent_at": now_utc}).eq("id", a["id"]).is_("reminder_day_before_sent_at", "null").execute()
             logger.info(
                 f"Day-before reminder sent for client {client_id} "
                 f"({len(appts_to_notify)} appointments on {appt_day})"
