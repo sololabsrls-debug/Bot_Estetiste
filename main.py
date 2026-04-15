@@ -76,6 +76,10 @@ app = FastAPI(
 from src.webhook_handler import router as webhook_router
 app.include_router(webhook_router)
 
+# Register admin routes
+from src.admin_api import router as admin_router
+app.include_router(admin_router)
+
 
 @app.get("/health")
 async def health_check():
