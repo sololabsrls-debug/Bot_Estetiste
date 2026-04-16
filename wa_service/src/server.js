@@ -109,17 +109,10 @@ app.post('/send', async (req, res) => {
     if (session.status !== 'connected') {
       return res.status(503).json({ error: 'Session not connected', status: session.status });
     }
-    let sessionReset = false;
-    try {
-      await sendWithAntibanMeasures(session.client, phone, message);
-    } catch (sendErr) {
-      // Session mismatch o errore di cifratura → pulisce e riprova una volta
-      console.warn(`[send] First attempt failed (${sendErr.message}), clearing session keys and retrying...`);
-      await clearContactSessionKeys(tenantId, phone);
-      sessionReset = true;
-      await sendWithAntibanMeasures(session.client, phone, message);
-    }
-    await logSend({ tenantId, phone, success: true, sessionReset });
+    // Pulisce session keys PRIMA di ogni invio → handshake fresco → desync impossibile
+    await clearContactSessionKeys(tenantId, phone);
+    await sendWithAntibanMeasures(session.client, phone, message);
+    await logSend({ tenantId, phone, success: true, sessionReset: true });
     res.json({ success: true });
   } catch (err) {
     await logSend({ tenantId, phone, success: false, error: err.message });
