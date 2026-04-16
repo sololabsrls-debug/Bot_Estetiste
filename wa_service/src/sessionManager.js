@@ -12,6 +12,7 @@
 const { default: makeWASocket, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
 const mongoose = require('mongoose');
 const { useMongoAuthState } = require('./mongoAuthState');
+const { clearContactSessionKeys, logSend } = require('./mongoUtils');
 
 // Map<tenantId, { client, status, qrCode }>
 const sessions = new Map();
@@ -98,6 +99,27 @@ async function _createSession(tenantId) {
           console.error(`[${tenantId}] Max reconnect attempts reached. Manual intervention needed.`);
           retryCounts.delete(tenantId);
         }
+      }
+    }
+  });
+
+  // ── Listener: cattura errori di consegna asincroni (desync Signal) ──
+  sock.ev.on('messages.update', async (updates) => {
+    for (const update of updates) {
+      if (update.update?.status === 0) { // 0 = ERROR
+        const jid = update.key?.remoteJid || '';
+        const phone = jid.split('@')[0];
+        if (!phone) continue;
+        console.warn(`[messages.update] ERROR status for ${phone} (tenant ${tenantId}) — clearing session keys`);
+        const cleared = await clearContactSessionKeys(tenantId, phone);
+        await logSend({
+          tenantId,
+          phone,
+          success: false,
+          error: 'messages.update ERROR status (Signal desync)',
+          sessionReset: cleared > 0,
+          trigger: 'messages.update',
+        });
       }
     }
   });

@@ -17,6 +17,7 @@ const express = require('express');
 const qrcode = require('qrcode');
 const { getOrCreateSession } = require('./sessionManager');
 const { sendWithAntibanMeasures } = require('./antibanUtils');
+const { clearContactSessionKeys, logSend } = require('./mongoUtils');
 
 const app = express();
 app.use(express.json());
@@ -96,40 +97,6 @@ app.get('/qr/:tenantId', async (req, res) => {
   }
 });
 
-// ── Helper: log invio su MongoDB ──────────────────────────────────
-async function logSend({ tenantId, phone, success, error = null, sessionReset = false }) {
-  try {
-    const mongoose = require('mongoose');
-    const db = mongoose.connection.db;
-    await db.collection('wa_send_logs').insertOne({
-      tenantId,
-      phone: phone.replace(/^\+/, ''),
-      success,
-      error,
-      sessionReset,
-      ts: new Date(),
-    });
-  } catch (err) {
-    console.error(`[send-log] Failed to write log: ${err.message}`);
-  }
-}
-
-// ── Helper: pulisce session keys per un singolo contatto ─────────
-async function clearContactSessionKeys(tenantId, phone) {
-  try {
-    const mongoose = require('mongoose');
-    const db = mongoose.connection.db;
-    const phoneClean = phone.replace(/^\+/, '');
-    const result = await db.collection('wa_keys').deleteMany({
-      tenantId,
-      type: 'session',
-      id: { $regex: phoneClean },
-    });
-    console.log(`[session-reset] Cleared ${result.deletedCount} keys for ${phoneClean} (tenant ${tenantId})`);
-  } catch (err) {
-    console.error(`[session-reset] Failed to clear keys: ${err.message}`);
-  }
-}
 
 // ── POST /send ────────────────────────────────────────────────────
 app.post('/send', async (req, res) => {
