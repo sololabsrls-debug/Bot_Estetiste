@@ -96,6 +96,24 @@ app.get('/qr/:tenantId', async (req, res) => {
   }
 });
 
+// ── Helper: log invio su MongoDB ──────────────────────────────────
+async function logSend({ tenantId, phone, success, error = null, sessionReset = false }) {
+  try {
+    const mongoose = require('mongoose');
+    const db = mongoose.connection.db;
+    await db.collection('wa_send_logs').insertOne({
+      tenantId,
+      phone: phone.replace(/^\+/, ''),
+      success,
+      error,
+      sessionReset,
+      ts: new Date(),
+    });
+  } catch (err) {
+    console.error(`[send-log] Failed to write log: ${err.message}`);
+  }
+}
+
 // ── Helper: pulisce session keys per un singolo contatto ─────────
 async function clearContactSessionKeys(tenantId, phone) {
   try {
@@ -124,16 +142,20 @@ app.post('/send', async (req, res) => {
     if (session.status !== 'connected') {
       return res.status(503).json({ error: 'Session not connected', status: session.status });
     }
+    let sessionReset = false;
     try {
       await sendWithAntibanMeasures(session.client, phone, message);
     } catch (sendErr) {
       // Session mismatch o errore di cifratura → pulisce e riprova una volta
       console.warn(`[send] First attempt failed (${sendErr.message}), clearing session keys and retrying...`);
       await clearContactSessionKeys(tenantId, phone);
+      sessionReset = true;
       await sendWithAntibanMeasures(session.client, phone, message);
     }
+    await logSend({ tenantId, phone, success: true, sessionReset });
     res.json({ success: true });
   } catch (err) {
+    await logSend({ tenantId, phone, success: false, error: err.message });
     res.status(500).json({ error: err.message });
   }
 });
