@@ -111,7 +111,15 @@ app.post('/send', async (req, res) => {
     }
     // Pulisce session keys PRIMA di ogni invio → handshake fresco → desync impossibile
     await clearContactSessionKeys(tenantId, phone);
-    await sendWithAntibanMeasures(session.client, phone, message);
+    try {
+      await sendWithAntibanMeasures(session.client, phone, message);
+    } catch (firstErr) {
+      // In-memory state di Baileys potrebbe ancora avere la vecchia sessione.
+      // Il primo tentativo fallito la resetta — aspetta 1.5s e riprova.
+      console.warn(`[send] First attempt failed (${firstErr.message}), retrying in 1.5s...`);
+      await new Promise(r => setTimeout(r, 1500));
+      await sendWithAntibanMeasures(session.client, phone, message);
+    }
     await logSend({ tenantId, phone, success: true, sessionReset: true });
     res.json({ success: true });
   } catch (err) {
