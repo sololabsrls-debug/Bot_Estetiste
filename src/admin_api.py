@@ -73,7 +73,7 @@ def _build_message(first_name: str, appts: list[dict]) -> str:
         all_groups.extend(build_groups(days[day_key]))
 
     lines = [f"• *{s}*: {d} alle *{t}*" for s, d, t in (_group_info(g) for g in all_groups)]
-    header = "Il Suo appuntamento confermato:" if len(all_groups) == 1 else "I Suoi prossimi appuntamenti:"
+    header = "Il Suo prossimo appuntamento:" if len(all_groups) == 1 else "I Suoi prossimi appuntamenti:"
     return (
         f"Gentile {first_name},\n\n"
         f"{header}\n"
