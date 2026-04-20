@@ -72,18 +72,11 @@ def _build_message(first_name: str, appts: list[dict]) -> str:
     for day_key in sorted(days.keys()):
         all_groups.extend(build_groups(days[day_key]))
 
-    if len(all_groups) == 1:
-        services, data_str, time_str = _group_info(all_groups[0])
-        return (
-            f"Gentile {first_name},\n\n"
-            f"Il Suo appuntamento per *{services}* è confermato "
-            f"per *{data_str} alle {time_str}*.\n\nLa aspettiamo!"
-        )
-
-    lines = [f"• *{s}* — {d} alle *{t}*" for s, d, t in (_group_info(g) for g in all_groups)]
+    lines = [f"• *{s}*: {d} alle *{t}*" for s, d, t in (_group_info(g) for g in all_groups)]
+    header = "Il Suo appuntamento confermato:" if len(all_groups) == 1 else "I Suoi prossimi appuntamenti:"
     return (
         f"Gentile {first_name},\n\n"
-        f"I Suoi prossimi appuntamenti:\n"
+        f"{header}\n"
         + "\n".join(lines)
         + "\n\nLa aspettiamo!"
     )

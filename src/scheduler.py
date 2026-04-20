@@ -416,7 +416,7 @@ async def _send_booking_confirmation():
                 giorno = GIORNI[start_at.weekday()]
                 data_str = f"{giorno} {start_at.day} {MESI[start_at.month - 1]}"
                 time_str = start_at.strftime("%H:%M")
-                lines.append(f"• *{services}* — {data_str} alle *{time_str}*")
+                lines.append(f"• *{services}*: {data_str} alle *{time_str}*")
             message = (
                 f"Gentile {first_name},\n\n"
                 f"I Suoi appuntamenti sono stati prenotati:\n"
