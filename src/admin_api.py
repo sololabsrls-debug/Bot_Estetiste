@@ -51,40 +51,36 @@ def _build_message(first_name: str, appts: list[dict]) -> str:
         groups.append(current)
         return groups
 
-    # Raggruppa per giorno
+    def _group_info(group):
+        services = " + ".join(
+            a.get("service", {}).get("name", "Appuntamento") if a.get("service") else "Appuntamento"
+            for a in group
+        )
+        start_dt = datetime.fromisoformat(group[0]["start_at"].replace("Z", "+00:00")).astimezone(ROME_TZ)
+        giorno = GIORNI[start_dt.weekday()]
+        data_str = f"{giorno} {start_dt.day} {MESI[start_dt.month - 1]}"
+        time_str = start_dt.strftime("%H:%M")
+        return services, data_str, time_str
+
+    # Raggruppa per giorno poi per sessioni consecutive
     days: dict[str, list] = {}
     for a in appts:
         day = datetime.fromisoformat(a["start_at"].replace("Z", "+00:00")).astimezone(ROME_TZ).date().isoformat()
         days.setdefault(day, []).append(a)
 
-    lines = []
+    all_groups = []
     for day_key in sorted(days.keys()):
-        day_appts = days[day_key]
-        groups = build_groups(day_appts)
-        for group in groups:
-            services = " + ".join(
-                a.get("service", {}).get("name", "Appuntamento") if a.get("service") else "Appuntamento"
-                for a in group
-            )
-            start_dt = datetime.fromisoformat(group[0]["start_at"].replace("Z", "+00:00")).astimezone(ROME_TZ)
-            giorno = GIORNI[start_dt.weekday()]
-            data_str = f"{giorno} {start_dt.day} {MESI[start_dt.month - 1]}"
-            time_str = start_dt.strftime("%H:%M")
-            lines.append(f"• *{services}* — {data_str} alle *{time_str}*")
+        all_groups.extend(build_groups(days[day_key]))
 
-    if len(lines) == 1:
-        a = appts[0]
-        service_name = a.get("service", {}).get("name", "Appuntamento") if a.get("service") else "Appuntamento"
-        start_dt = datetime.fromisoformat(a["start_at"].replace("Z", "+00:00")).astimezone(ROME_TZ)
-        giorno = GIORNI[start_dt.weekday()]
-        data_str = f"{giorno} {start_dt.day} {MESI[start_dt.month - 1]}"
-        time_str = start_dt.strftime("%H:%M")
+    if len(all_groups) == 1:
+        services, data_str, time_str = _group_info(all_groups[0])
         return (
             f"Gentile {first_name},\n\n"
-            f"Il Suo appuntamento per *{service_name}* è confermato "
+            f"Il Suo appuntamento per *{services}* è confermato "
             f"per *{data_str} alle {time_str}*.\n\nLa aspettiamo!"
         )
 
+    lines = [f"• *{s}* — {d} alle *{t}*" for s, d, t in (_group_info(g) for g in all_groups)]
     return (
         f"Gentile {first_name},\n\n"
         f"I Suoi prossimi appuntamenti:\n"
