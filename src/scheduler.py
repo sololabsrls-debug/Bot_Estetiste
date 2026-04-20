@@ -402,8 +402,9 @@ async def _send_booking_confirmation():
             time_str = start_at.strftime("%H:%M")
             message = (
                 f"Gentile {first_name},\n\n"
-                f"Il Suo appuntamento per *{service_name}* è stato prenotato "
-                f"per *{data_str} alle {time_str}*.\n\nTi aspettiamo!"
+                f"La sua prenotazione è confermata:\n"
+                f"• *{service_name}*: {data_str} alle *{time_str}*\n\n"
+                f"La aspettiamo!"
             )
         else:
             lines = []
@@ -590,8 +591,8 @@ async def _send_reminder_day_before():
             time_str = datetime.fromisoformat(a["start_at"].replace("Z", "+00:00")).astimezone(ROME_TZ).strftime("%H:%M")
             message = (
                 f"Gentile {first_name},\n\n"
-                f"Le ricordiamo il Suo appuntamento per *{service_name}* "
-                f"domani alle *{time_str}*.\n\n"
+                f"Le ricordiamo il Suo appuntamento di domani:\n"
+                f"• *{service_name}*: alle *{time_str}*\n\n"
                 f"La aspettiamo!"
             )
         else:
