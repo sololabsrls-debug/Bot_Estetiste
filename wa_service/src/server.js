@@ -63,6 +63,30 @@ app.get('/setup/:tenantId/qr', async (req, res) => {
   }
 });
 
+// ── POST /support (no auth — destinazione hardcoded al numero supporto) ──
+const SUPPORT_PHONE = '393927065684';
+app.post('/support', async (req, res) => {
+  const { tenantId, tenantName, category, message } = req.body;
+  if (!tenantId || !message) {
+    return res.status(400).json({ error: 'tenantId e message sono obbligatori' });
+  }
+  try {
+    const session = await getOrCreateSession(tenantId);
+    if (session.status !== 'connected') {
+      return res.status(503).json({ error: 'WhatsApp non connesso', status: session.status });
+    }
+    const fullMessage =
+      `🆘 *Richiesta supporto EsteticaFlow*\n\n` +
+      `🏪 *Salone:* ${tenantName || 'N/D'}\n` +
+      `📂 *Categoria:* ${category || 'N/D'}\n\n` +
+      `📝 *Messaggio:*\n${message.trim()}`;
+    await sendWithAntibanMeasures(session.client, SUPPORT_PHONE, fullMessage);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Auth middleware ────────────────────────────────────────────────
 app.use((req, res, next) => {
   const apiKey = req.headers['x-api-key'];
