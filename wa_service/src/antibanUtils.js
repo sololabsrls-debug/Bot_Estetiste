@@ -30,7 +30,13 @@ async function sendWithAntibanMeasures(sock, phone, message, imageUrl = null) {
   await sock.sendPresenceUpdate('composing', jid);
   await randomDelay(1500, 2500);
   if (imageUrl) {
-    await sock.sendMessage(jid, { image: { url: imageUrl }, caption: message });
+    try {
+      await sock.sendMessage(jid, { image: { url: imageUrl }, caption: message });
+    } catch (imgErr) {
+      // Image download/send failed — fall back to text-only so the message still reaches the recipient
+      console.warn(`[sendWithAntibanMeasures] Image send failed for ${phone} (${imgErr.message}), falling back to text`);
+      await sock.sendMessage(jid, { text: message });
+    }
   } else {
     await sock.sendMessage(jid, { text: message });
   }
