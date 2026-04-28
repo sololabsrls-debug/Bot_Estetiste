@@ -17,18 +17,23 @@ function randomDelay(minMs = 2000, maxMs = 5000) {
  * Sends a WhatsApp message with anti-ban measures:
  * 1. Shows typing indicator for 1.5-2.5 seconds
  * 2. Waits a random delay
- * 3. Sends the message
+ * 3. Sends the message (text only, or image+caption if imageUrl provided)
  * 4. Clears typing state
  *
  * @param {import('@whiskeysockets/baileys').WASocket} sock
  * @param {string} phone - Phone number without +, e.g. "393401234567"
  * @param {string} message
+ * @param {string|null} imageUrl - Optional public image URL to attach
  */
-async function sendWithAntibanMeasures(sock, phone, message) {
+async function sendWithAntibanMeasures(sock, phone, message, imageUrl = null) {
   const jid = `${phone}@s.whatsapp.net`;
   await sock.sendPresenceUpdate('composing', jid);
   await randomDelay(1500, 2500);
-  await sock.sendMessage(jid, { text: message });
+  if (imageUrl) {
+    await sock.sendMessage(jid, { image: { url: imageUrl }, caption: message });
+  } else {
+    await sock.sendMessage(jid, { text: message });
+  }
   await sock.sendPresenceUpdate('paused', jid);
 }
 
