@@ -347,8 +347,7 @@ async def _send_booking_confirmation():
         logger.error(f"Booking confirmation query error: {e}")
         return
 
-    # Raggruppa per (tenant_id, client_id, giorno_rome) — solo appuntamenti senza booking_confirm
-    # Un messaggio separato per ogni giorno
+    # Raggruppa per (tenant_id, client_id) — tutti gli appuntamenti creati nel window 15min → unico messaggio
     to_process: dict[tuple, dict] = {}
     for appt in response.data:
         if appt.get("booking_confirm_sent_at"):
@@ -362,28 +361,27 @@ async def _send_booking_confirmation():
         if not client.get("whatsapp_phone"):
             continue
 
-        start_at = datetime.fromisoformat(appt["start_at"].replace("Z", "+00:00")).astimezone(ROME_TZ)
-        day_key = start_at.date()
-        key = (tenant["id"], client["id"], day_key)
+        key = (tenant["id"], client["id"])
         if key not in to_process:
             to_process[key] = {"client": client, "tenant": tenant, "appts": []}
         to_process[key]["appts"].append(appt)
 
     def build_groups(appts):
+        sorted_appts = sorted(appts, key=lambda a: a["start_at"])
         groups = []
-        current = [appts[0]]
-        for i in range(1, len(appts)):
-            prev_end = datetime.fromisoformat(appts[i-1]["end_at"].replace("Z", "+00:00"))
-            curr_start = datetime.fromisoformat(appts[i]["start_at"].replace("Z", "+00:00"))
+        current = [sorted_appts[0]]
+        for i in range(1, len(sorted_appts)):
+            prev_end = datetime.fromisoformat(sorted_appts[i-1]["end_at"].replace("Z", "+00:00"))
+            curr_start = datetime.fromisoformat(sorted_appts[i]["start_at"].replace("Z", "+00:00"))
             if prev_end == curr_start:
-                current.append(appts[i])
+                current.append(sorted_appts[i])
             else:
                 groups.append(current)
-                current = [appts[i]]
+                current = [sorted_appts[i]]
         groups.append(current)
         return groups
 
-    for (tenant_id, client_id, day_key), data in to_process.items():
+    for (tenant_id, client_id), data in to_process.items():
         client = data["client"]
         appts = data["appts"]
 
@@ -393,7 +391,6 @@ async def _send_booking_confirmation():
         groups = build_groups(appts)
 
         if len(groups) == 1 and len(groups[0]) == 1:
-            # Singolo appuntamento
             a = groups[0][0]
             service_name = a.get("service", {}).get("name", "Appuntamento") if a.get("service") else "Appuntamento"
             start_at = datetime.fromisoformat(a["start_at"].replace("Z", "+00:00")).astimezone(ROME_TZ)
@@ -430,9 +427,9 @@ async def _send_booking_confirmation():
             now_utc = datetime.now(timezone.utc).isoformat()
             for a in appts:
                 sb.table("appointments").update({"booking_confirm_sent_at": now_utc}).eq("id", a["id"]).is_("booking_confirm_sent_at", "null").execute()
-            logger.info(f"Booking confirmation sent for client {client_id} day {day_key} ({len(appts)} appointments)")
+            logger.info(f"Booking confirmation sent for client {client_id} ({len(appts)} appointments)")
         else:
-            logger.error(f"Failed to send booking confirmation for client {client_id} day {day_key}")
+            logger.error(f"Failed to send booking confirmation for client {client_id}")
 
 
 # ─── Job: Reminder giorno prima (tenant unofficial) ──────────────
