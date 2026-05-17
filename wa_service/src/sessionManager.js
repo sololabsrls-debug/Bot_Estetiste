@@ -12,7 +12,7 @@
 const { default: makeWASocket, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
 const mongoose = require('mongoose');
 const { useMongoAuthState } = require('./mongoAuthState');
-const { clearContactSessionKeys, logSend } = require('./mongoUtils');
+const { clearContactSessionKeys, logSend, clearTenantSession } = require('./mongoUtils');
 
 // Map<tenantId, { client, status, qrCode }>
 const sessions = new Map();
@@ -128,4 +128,15 @@ async function _createSession(tenantId) {
   return session;
 }
 
-module.exports = { getOrCreateSession, sessions };
+async function logoutSession(tenantId) {
+  const session = sessions.get(tenantId);
+  sessions.delete(tenantId);
+  retryCounts.delete(tenantId);
+  if (session?.client) {
+    try { await session.client.logout(); } catch {}
+  }
+  await ensureMongoose();
+  await clearTenantSession(tenantId);
+}
+
+module.exports = { getOrCreateSession, sessions, logoutSession };

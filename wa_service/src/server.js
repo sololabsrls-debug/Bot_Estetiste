@@ -15,7 +15,7 @@
 
 const express = require('express');
 const qrcode = require('qrcode');
-const { getOrCreateSession } = require('./sessionManager');
+const { getOrCreateSession, logoutSession } = require('./sessionManager');
 const { sendWithAntibanMeasures } = require('./antibanUtils');
 const { clearContactSessionKeys, logSend } = require('./mongoUtils');
 
@@ -58,6 +58,16 @@ app.get('/setup/:tenantId/qr', async (req, res) => {
     const buf = await qrcode.toBuffer(session.qrCode);
     res.set('Content-Type', 'image/png');
     res.send(buf);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Setup: logout — disconnette e cancella credenziali MongoDB (no auth) ──
+app.post('/setup/:tenantId/logout', async (req, res) => {
+  try {
+    await logoutSession(req.params.tenantId);
+    res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

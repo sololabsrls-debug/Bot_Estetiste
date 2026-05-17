@@ -38,4 +38,17 @@ async function logSend({ tenantId, phone, success, error = null, sessionReset = 
   }
 }
 
-module.exports = { clearContactSessionKeys, logSend };
+async function clearTenantSession(tenantId) {
+  try {
+    const db = mongoose.connection.db;
+    const [creds, keys] = await Promise.all([
+      db.collection('wa_creds').deleteMany({ _id: tenantId }),
+      db.collection('wa_keys').deleteMany({ tenantId }),
+    ]);
+    console.log(`[logout] Cleared tenant ${tenantId}: ${creds.deletedCount} creds, ${keys.deletedCount} keys`);
+  } catch (err) {
+    console.error(`[logout] Failed to clear tenant session: ${err.message}`);
+  }
+}
+
+module.exports = { clearContactSessionKeys, logSend, clearTenantSession };
