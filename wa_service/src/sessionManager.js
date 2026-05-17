@@ -39,8 +39,12 @@ async function ensureMongoose() {
   }
 }
 
+const reconnectPending = new Set();
+
 async function getOrCreateSession(tenantId) {
+  // Only create if no session exists. Reconnects handled by setTimeout only.
   if (sessions.has(tenantId)) return sessions.get(tenantId);
+  if (reconnectPending.has(tenantId)) return { status: 'disconnected', client: null, qrCode: null };
   return _createSession(tenantId);
 }
 
@@ -94,7 +98,8 @@ async function _createSession(tenantId) {
           retryCounts.set(tenantId, retries);
           const delay = Math.min(5000 * retries, 30000);
           console.log(`[${tenantId}] Reconnecting in ${delay}ms (attempt ${retries}/5)...`);
-          setTimeout(() => getOrCreateSession(tenantId), delay);
+          reconnectPending.add(tenantId);
+          setTimeout(() => { reconnectPending.delete(tenantId); _createSession(tenantId); }, delay);
         } else {
           console.error(`[${tenantId}] Max reconnect attempts reached. Manual intervention needed.`);
           retryCounts.delete(tenantId);
