@@ -69,8 +69,6 @@ async function _createSession(tenantId) {
     printQRInTerminal: false,
     logger: SILENT_LOGGER,
     browser: ['Bot Estetiste', 'Chrome', '1.0.0'],
-    // Test su BeautyTest: non annunciare presenza online → iPhone riceve notifiche push
-    ...(tenantId === 'a2c90b06-ae7e-4f84-a366-242db6ad67a3' ? { markOnlineOnConnect: false } : {}),
   });
 
   sock.ev.on('creds.update', saveCreds);
