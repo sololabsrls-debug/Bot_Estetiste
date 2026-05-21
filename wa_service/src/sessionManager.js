@@ -137,6 +137,16 @@ async function _createSession(tenantId) {
   return session;
 }
 
+// Keep all sessions appearing offline so iPhone receives push notifications.
+// Baileys keepalives re-activate the device every ~10s; this counters them.
+setInterval(() => {
+  for (const [, s] of sessions) {
+    if (s.status === 'connected' && s.client) {
+      s.client.sendPresenceUpdate('unavailable').catch(() => {});
+    }
+  }
+}, 5000);
+
 async function logoutSession(tenantId) {
   const session = sessions.get(tenantId);
   sessions.delete(tenantId);
