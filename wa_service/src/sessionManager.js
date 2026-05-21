@@ -63,12 +63,16 @@ async function _createSession(tenantId) {
   const session = { client: null, status: 'initializing', qrCode: null };
   sessions.set(tenantId, session);
 
+  const BEAUTY_TEST_ID = 'a2c90b06-ae7e-4f84-a366-242db6ad67a3';
   const sock = makeWASocket({
     version,
     auth: state,
     printQRInTerminal: false,
     logger: SILENT_LOGGER,
     browser: ['Bot Estetiste', 'Chrome', '1.0.0'],
+    // Test: suppress online presence so iPhone receives push notifications.
+    // Only for BeautyTest — revert if messages get stuck "in attesa".
+    ...(tenantId === BEAUTY_TEST_ID ? { markOnlineOnConnect: false } : {}),
   });
 
   sock.ev.on('creds.update', saveCreds);
