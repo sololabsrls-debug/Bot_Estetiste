@@ -69,10 +69,6 @@ async function _createSession(tenantId) {
     printQRInTerminal: false,
     logger: SILENT_LOGGER,
     browser: ['Bot Estetiste', 'Chrome', '1.0.0'],
-    // Do not announce presence on connect — keeps device "offline" so iPhones
-    // receive push notifications. After each send we call sendPresenceUpdate('unavailable')
-    // to stay offline between messages.
-    markOnlineOnConnect: false,
   });
 
   sock.ev.on('creds.update', saveCreds);
@@ -137,15 +133,6 @@ async function _createSession(tenantId) {
   return session;
 }
 
-// Keep all sessions appearing offline so iPhone receives push notifications.
-// Baileys keepalives re-activate the device every ~10s; this counters them.
-setInterval(() => {
-  for (const [, s] of sessions) {
-    if (s.status === 'connected' && s.client) {
-      s.client.sendPresenceUpdate('unavailable').catch(() => {});
-    }
-  }
-}, 5000);
 
 async function logoutSession(tenantId) {
   const session = sessions.get(tenantId);
