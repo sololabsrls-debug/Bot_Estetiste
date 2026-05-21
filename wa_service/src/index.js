@@ -1,3 +1,11 @@
+// Suppress libsignal verbose errors that flood Railway logs (Bad MAC, Closing session, etc.)
+const _origError = console.error.bind(console);
+console.error = (...args) => {
+  const msg = args[0]?.toString?.() || '';
+  if (msg.includes('Bad MAC') || msg.includes('Session error') || msg.includes('Closing session') || msg.includes('SessionEntry')) return;
+  _origError(...args);
+};
+
 const app = require('./server');
 
 const PORT = process.env.PORT || 3000;
