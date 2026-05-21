@@ -60,7 +60,7 @@ async function _createSession(tenantId) {
     version = [2, 3000, 1015901307];  // fallback if network unavailable
   }
 
-  const session = { client: null, status: 'initializing', qrCode: null };
+  const session = { client: null, status: 'initializing', qrCode: null, sentMessages: new Map() };
   sessions.set(tenantId, session);
 
   const sock = makeWASocket({
@@ -70,6 +70,7 @@ async function _createSession(tenantId) {
     logger: SILENT_LOGGER,
     browser: ['Bot Estetiste', 'Chrome', '1.0.0'],
     markOnlineOnConnect: false,
+    getMessage: async (key) => session.sentMessages.get(key.id),
   });
 
   sock.ev.on('creds.update', saveCreds);

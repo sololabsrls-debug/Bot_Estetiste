@@ -8,12 +8,17 @@ async function clearContactSessionKeys(tenantId, phone) {
   try {
     const db = mongoose.connection.db;
     const phoneClean = phone.replace(/^\+/, '');
+    const docs = await db.collection('wa_keys').find(
+      { tenantId, type: 'session', id: { $regex: phoneClean } },
+      { projection: { id: 1 } }
+    ).toArray();
+    const ids = docs.map(d => d.id);
+    console.log(`[session-reset] Clearing ${ids.length} keys for ${phoneClean} (tenant ${tenantId}): ${ids.join(' | ')}`);
     const result = await db.collection('wa_keys').deleteMany({
       tenantId,
       type: 'session',
       id: { $regex: phoneClean },
     });
-    console.log(`[session-reset] Cleared ${result.deletedCount} keys for ${phoneClean} (tenant ${tenantId})`);
     return result.deletedCount;
   } catch (err) {
     console.error(`[session-reset] Failed to clear keys: ${err.message}`);

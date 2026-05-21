@@ -30,18 +30,20 @@ async function sendWithAntibanMeasures(sock, phone, message, imageUrl = null, go
   if (goOffline) await sock.sendPresenceUpdate('available');
   await sock.sendPresenceUpdate('composing', jid);
   await randomDelay(1500, 2500);
+  let sent;
   if (imageUrl) {
     try {
-      await sock.sendMessage(jid, { image: { url: imageUrl }, caption: message });
+      sent = await sock.sendMessage(jid, { image: { url: imageUrl }, caption: message });
     } catch (imgErr) {
       console.warn(`[sendWithAntibanMeasures] Image send failed for ${phone} (${imgErr.message}), falling back to text`);
-      await sock.sendMessage(jid, { text: message });
+      sent = await sock.sendMessage(jid, { text: message });
     }
   } else {
-    await sock.sendMessage(jid, { text: message });
+    sent = await sock.sendMessage(jid, { text: message });
   }
   await sock.sendPresenceUpdate('paused', jid);
   if (goOffline) await sock.sendPresenceUpdate('unavailable');
+  return sent;
 }
 
 /**
