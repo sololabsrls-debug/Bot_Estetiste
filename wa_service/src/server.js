@@ -148,11 +148,18 @@ app.post('/send', async (req, res) => {
     try {
       await sendWithAntibanMeasures(session.client, phone, message, imageUrl || null);
     } catch (firstErr) {
-      // In-memory state di Baileys potrebbe ancora avere la vecchia sessione.
-      // Il primo tentativo fallito la resetta — aspetta 1.5s e riprova.
-      console.warn(`[send] First attempt failed (${firstErr.message}), retrying in 1.5s...`);
-      await new Promise(r => setTimeout(r, 1500));
-      await sendWithAntibanMeasures(session.client, phone, message, imageUrl || null);
+      // Primo tentativo fallito: Baileys aveva sessione stale in memoria.
+      // Aspetta 4s per completare il handshake Signal con WA server, poi riprova.
+      console.warn(`[send] First attempt failed (${firstErr.message}), retrying in 4s...`);
+      await new Promise(r => setTimeout(r, 4000));
+      try {
+        await sendWithAntibanMeasures(session.client, phone, message, imageUrl || null);
+      } catch (secondErr) {
+        // Handshake ancora in corso — attendi altri 6s e ultimo tentativo.
+        console.warn(`[send] Second attempt failed (${secondErr.message}), final retry in 6s...`);
+        await new Promise(r => setTimeout(r, 6000));
+        await sendWithAntibanMeasures(session.client, phone, message, imageUrl || null);
+      }
     }
     await logSend({ tenantId, phone, success: true, sessionReset: true });
     res.json({ success: true });
