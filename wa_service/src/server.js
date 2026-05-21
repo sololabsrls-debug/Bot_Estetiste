@@ -16,7 +16,7 @@
 const express = require('express');
 const qrcode = require('qrcode');
 const { getOrCreateSession, logoutSession } = require('./sessionManager');
-const { sendWithAntibanMeasures } = require('./antibanUtils');
+const { sendWithAntibanMeasures, warmupSignalSession } = require('./antibanUtils');
 const { clearContactSessionKeys, logSend } = require('./mongoUtils');
 
 const app = express();
@@ -152,9 +152,8 @@ app.post('/send', async (req, res) => {
     }
     // Pulisce session keys PRIMA di ogni invio → handshake fresco → desync impossibile
     await clearContactSessionKeys(tenantId, phone);
-    // assertSessions forza refresh sessione Signal in-memory prima del send
-    const jid = `${phone.replace(/^\+/, '')}@s.whatsapp.net`;
-    try { await session.client.assertSessions([jid], true); } catch {}
+    // Warmup: self-message loopback per sincronizzare libsignal prima del send reale
+    await warmupSignalSession(session.client);
     try {
       await sendWithAntibanMeasures(session.client, phone, message, imageUrl || null, true);
     } catch (firstErr) {

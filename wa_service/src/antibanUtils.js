@@ -44,4 +44,22 @@ async function sendWithAntibanMeasures(sock, phone, message, imageUrl = null, go
   if (goOffline) await sock.sendPresenceUpdate('unavailable');
 }
 
-module.exports = { randomDelay, sendWithAntibanMeasures };
+/**
+ * Sends a message to the bot's own number to trigger a Signal loopback.
+ * The incoming echo re-syncs libsignal's global in-memory state, ensuring
+ * subsequent sends are visible on the aesthetician's linked phone.
+ */
+async function warmupSignalSession(sock) {
+  try {
+    const selfPhone = sock.user?.id?.split(':')[0];
+    if (!selfPhone || selfPhone === 'undefined') return;
+    const selfJid = `${selfPhone}@s.whatsapp.net`;
+    const sent = await sock.sendMessage(selfJid, { text: '​' });
+    await new Promise(r => setTimeout(r, 1500));
+    if (sent?.key) {
+      await sock.sendMessage(selfJid, { delete: sent.key }).catch(() => {});
+    }
+  } catch {}
+}
+
+module.exports = { randomDelay, sendWithAntibanMeasures, warmupSignalSession };
