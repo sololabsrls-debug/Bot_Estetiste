@@ -69,6 +69,7 @@ async function _createSession(tenantId) {
     printQRInTerminal: false,
     logger: SILENT_LOGGER,
     browser: ['Bot Estetiste', 'Chrome', '1.0.0'],
+    markOnlineOnConnect: false,
   });
 
   sock.ev.on('creds.update', saveCreds);
@@ -133,6 +134,14 @@ async function _createSession(tenantId) {
   return session;
 }
 
+// Keep all sessions appearing offline so iPhone receives push notifications.
+setInterval(() => {
+  for (const [, s] of sessions) {
+    if (s.status === 'connected' && s.client) {
+      s.client.sendPresenceUpdate('unavailable').catch(() => {});
+    }
+  }
+}, 5000);
 
 async function logoutSession(tenantId) {
   const session = sessions.get(tenantId);

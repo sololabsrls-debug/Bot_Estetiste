@@ -90,7 +90,7 @@ app.post('/support', async (req, res) => {
       `🏪 *Salone:* ${tenantName || 'N/D'}\n` +
       `📂 *Categoria:* ${category || 'N/D'}\n\n` +
       `📝 *Messaggio:*\n${message.trim()}`;
-    await sendWithAntibanMeasures(session.client, SUPPORT_PHONE, fullMessage, null);
+    await sendWithAntibanMeasures(session.client, SUPPORT_PHONE, fullMessage, null, true);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -153,19 +153,19 @@ app.post('/send', async (req, res) => {
     // Pulisce session keys PRIMA di ogni invio → handshake fresco → desync impossibile
     await clearContactSessionKeys(tenantId, phone);
     try {
-      await sendWithAntibanMeasures(session.client, phone, message, imageUrl || null);
+      await sendWithAntibanMeasures(session.client, phone, message, imageUrl || null, true);
     } catch (firstErr) {
       // Primo tentativo fallito: Baileys aveva sessione stale in memoria.
       // Aspetta 4s per completare il handshake Signal con WA server, poi riprova.
       console.warn(`[send] First attempt failed (${firstErr.message}), retrying in 4s...`);
       await new Promise(r => setTimeout(r, 4000));
       try {
-        await sendWithAntibanMeasures(session.client, phone, message, imageUrl || null);
+        await sendWithAntibanMeasures(session.client, phone, message, imageUrl || null, true);
       } catch (secondErr) {
         // Handshake ancora in corso — attendi altri 6s e ultimo tentativo.
         console.warn(`[send] Second attempt failed (${secondErr.message}), final retry in 6s...`);
         await new Promise(r => setTimeout(r, 6000));
-        await sendWithAntibanMeasures(session.client, phone, message, imageUrl || null);
+        await sendWithAntibanMeasures(session.client, phone, message, imageUrl || null, true);
       }
     }
     await logSend({ tenantId, phone, success: true, sessionReset: true });

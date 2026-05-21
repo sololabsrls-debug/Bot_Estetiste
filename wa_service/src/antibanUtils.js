@@ -25,8 +25,9 @@ function randomDelay(minMs = 2000, maxMs = 5000) {
  * @param {string} message
  * @param {string|null} imageUrl - Optional public image URL to attach
  */
-async function sendWithAntibanMeasures(sock, phone, message, imageUrl = null) {
+async function sendWithAntibanMeasures(sock, phone, message, imageUrl = null, goOffline = false) {
   const jid = `${phone}@s.whatsapp.net`;
+  if (goOffline) await sock.sendPresenceUpdate('available');
   await sock.sendPresenceUpdate('composing', jid);
   await randomDelay(1500, 2500);
   if (imageUrl) {
@@ -40,6 +41,7 @@ async function sendWithAntibanMeasures(sock, phone, message, imageUrl = null) {
     await sock.sendMessage(jid, { text: message });
   }
   await sock.sendPresenceUpdate('paused', jid);
+  if (goOffline) await sock.sendPresenceUpdate('unavailable');
 }
 
 module.exports = { randomDelay, sendWithAntibanMeasures };
