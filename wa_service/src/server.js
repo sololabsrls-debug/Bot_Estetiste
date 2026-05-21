@@ -152,6 +152,9 @@ app.post('/send', async (req, res) => {
     }
     // Pulisce session keys PRIMA di ogni invio → handshake fresco → desync impossibile
     await clearContactSessionKeys(tenantId, phone);
+    // assertSessions forza refresh sessione Signal in-memory prima del send
+    const jid = `${phone.replace(/^\+/, '')}@s.whatsapp.net`;
+    try { await session.client.assertSessions([jid], true); } catch {}
     try {
       await sendWithAntibanMeasures(session.client, phone, message, imageUrl || null, true);
     } catch (firstErr) {
