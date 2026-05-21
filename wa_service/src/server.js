@@ -16,7 +16,7 @@
 const express = require('express');
 const qrcode = require('qrcode');
 const { getOrCreateSession, logoutSession } = require('./sessionManager');
-const { sendWithAntibanMeasures } = require('./antibanUtils');
+const { sendWithAntibanMeasures, warmupSignalSession } = require('./antibanUtils');
 const { clearContactSessionKeys, logSend } = require('./mongoUtils');
 
 const app = express();
@@ -150,18 +150,21 @@ app.post('/send', async (req, res) => {
     if (session.status !== 'connected') {
       return res.status(503).json({ error: 'Session not connected', status: session.status });
     }
+    // Pulisce session keys PRIMA di ogni invio → handshake fresco → desync impossibile
+    await clearContactSessionKeys(tenantId, phone);
+    // Warmup: self-message loopback per sincronizzare libsignal prima del send reale
+    await warmupSignalSession(session.client);
     try {
       await sendWithAntibanMeasures(session.client, phone, message, imageUrl || null, true);
     } catch (firstErr) {
-      console.warn(`[send] First attempt failed (${firstErr.message}), clearing session and retrying in 4s...`);
-      await clearContactSessionKeys(tenantId, phone);
-      if (session.client?.signalRepository?.clearSession) {
-        session.client.signalRepository.clearSession();
-      }
+      // Primo tentativo fallito: Baileys aveva sessione stale in memoria.
+      // Aspetta 4s per completare il handshake Signal con WA server, poi riprova.
+      console.warn(`[send] First attempt failed (${firstErr.message}), retrying in 4s...`);
       await new Promise(r => setTimeout(r, 4000));
       try {
         await sendWithAntibanMeasures(session.client, phone, message, imageUrl || null, true);
       } catch (secondErr) {
+        // Handshake ancora in corso — attendi altri 6s e ultimo tentativo.
         console.warn(`[send] Second attempt failed (${secondErr.message}), final retry in 6s...`);
         await new Promise(r => setTimeout(r, 6000));
         await sendWithAntibanMeasures(session.client, phone, message, imageUrl || null, true);
