@@ -10,7 +10,6 @@ async function clearContactSessionKeys(tenantId, phone) {
     const phoneClean = phone.replace(/^\+/, '');
     const result = await db.collection('wa_keys').deleteMany({
       tenantId,
-      type: 'session',
       id: { $regex: phoneClean },
     });
     console.log(`[session-reset] Cleared ${result.deletedCount} keys for ${phoneClean} (tenant ${tenantId})`);
