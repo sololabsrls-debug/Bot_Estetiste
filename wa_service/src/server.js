@@ -132,6 +132,8 @@ app.get('/qr/:tenantId', async (req, res) => {
 });
 
 
+const BEAUTY_TEST_ID = 'a2c90b06-ae7e-4f84-a366-242db6ad67a3';
+
 // ── POST /send ────────────────────────────────────────────────────
 app.post('/send', async (req, res) => {
   const { tenantId, phone, message, imageUrl } = req.body;
@@ -140,25 +142,33 @@ app.post('/send', async (req, res) => {
   }
   try {
     const session = await getOrCreateSession(tenantId);
+    // Se ancora initializing, aspetta fino a 30s prima di dare 503
+    if (session.status === 'initializing') {
+      const deadline = Date.now() + 30000;
+      while (session.status === 'initializing' && Date.now() < deadline) {
+        await new Promise(r => setTimeout(r, 1000));
+      }
+    }
     if (session.status !== 'connected') {
       return res.status(503).json({ error: 'Session not connected', status: session.status });
     }
+    const goOffline = tenantId === BEAUTY_TEST_ID;
     // Pulisce session keys PRIMA di ogni invio → handshake fresco → desync impossibile
     await clearContactSessionKeys(tenantId, phone);
     try {
-      await sendWithAntibanMeasures(session.client, phone, message, imageUrl || null);
+      await sendWithAntibanMeasures(session.client, phone, message, imageUrl || null, goOffline);
     } catch (firstErr) {
       // Primo tentativo fallito: Baileys aveva sessione stale in memoria.
       // Aspetta 4s per completare il handshake Signal con WA server, poi riprova.
       console.warn(`[send] First attempt failed (${firstErr.message}), retrying in 4s...`);
       await new Promise(r => setTimeout(r, 4000));
       try {
-        await sendWithAntibanMeasures(session.client, phone, message, imageUrl || null);
+        await sendWithAntibanMeasures(session.client, phone, message, imageUrl || null, goOffline);
       } catch (secondErr) {
         // Handshake ancora in corso — attendi altri 6s e ultimo tentativo.
         console.warn(`[send] Second attempt failed (${secondErr.message}), final retry in 6s...`);
         await new Promise(r => setTimeout(r, 6000));
-        await sendWithAntibanMeasures(session.client, phone, message, imageUrl || null);
+        await sendWithAntibanMeasures(session.client, phone, message, imageUrl || null, goOffline);
       }
     }
     await logSend({ tenantId, phone, success: true, sessionReset: true });
