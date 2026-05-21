@@ -6,7 +6,7 @@
  *   Collection 'wa_keys':  { tenantId, type, id, value: <JSON string> }
  */
 
-const { initAuthCreds, BufferJSON } = require('@whiskeysockets/baileys');
+const { initAuthCreds, BufferJSON, makeCacheableSignalKeyStore } = require('@whiskeysockets/baileys');
 
 /**
  * @param {string} tenantId
@@ -68,6 +68,7 @@ async function useMongoAuthState(tenantId, db) {
     }
   };
 
+  state.keys = makeCacheableSignalKeyStore(state.keys, null);
   return { state, saveCreds };
 }
 
