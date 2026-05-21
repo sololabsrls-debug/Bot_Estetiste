@@ -116,7 +116,7 @@ async function _createSession(tenantId) {
         const jid = update.key?.remoteJid || '';
         const phone = jid.split('@')[0];
         if (!phone) continue;
-        console.warn(`[messages.update] ERROR status for ${phone} (tenant ${tenantId}) — clearing session keys`);
+        console.warn(`[messages.update] ERROR status=0 tenant=${tenantId} phone=${phone} fromMe=${update.key?.fromMe} id=${update.key?.id} participant=${update.key?.participant}`);
         const cleared = await clearContactSessionKeys(tenantId, phone);
         await logSend({
           tenantId,
