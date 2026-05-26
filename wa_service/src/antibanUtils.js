@@ -3,6 +3,16 @@
  * Simulates human behavior: typing indicator + random delay before sending.
  */
 
+const { getUrlInfo } = require('@whiskeysockets/baileys');
+
+async function fetchLinkPreview(url) {
+  try {
+    return await getUrlInfo(url, { thumbnailWidth: 300, fetchOpts: { timeout: 5000 } });
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Returns a promise that resolves after a random delay between minMs and maxMs.
  */
@@ -39,7 +49,10 @@ async function sendWithAntibanMeasures(sock, phone, message, imageUrl = null, go
       sent = await sock.sendMessage(jid, { text: message });
     }
   } else {
-    sent = await sock.sendMessage(jid, { text: message });
+    const urlMatch = message.match(/https?:\/\/[^\s]+/);
+    let linkPreview;
+    if (urlMatch) linkPreview = await fetchLinkPreview(urlMatch[0]);
+    sent = await sock.sendMessage(jid, { text: message, linkPreview });
   }
   await sock.sendPresenceUpdate('paused', jid);
   if (goOffline) await sock.sendPresenceUpdate('unavailable');
