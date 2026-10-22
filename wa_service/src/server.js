@@ -4,8 +4,10 @@
  *
  * Endpoints:
  *   GET  /health                   → { status: 'ok' }
- *   GET  /setup/:tenantId/status   → { status: 'connected'|'qr_pending'|'disconnected'|'initializing'|'not_started' }
- *   GET  /setup/:tenantId/qr       → PNG QR code (no auth, for Lovable frontend)
+ *   GET  /setup/:tenantId/status   → { status: 'connected'|'qr_pending'|'disconnected'|'initializing'|'not_started' } [requires X-API-Key]
+ *   GET  /setup/:tenantId/qr       → PNG QR code      [requires X-API-Key]
+ *   POST /setup/:tenantId/logout   → { ok: true }     [requires X-API-Key]
+ *   POST /support                  → { success: true } [requires X-API-Key]
  *   GET  /status/:tenantId         → { status: ... }  [requires X-API-Key]
  *   GET  /qr/:tenantId             → PNG QR code      [requires X-API-Key]
  *   POST /send                     → { success: true } [requires X-API-Key]
@@ -36,7 +38,19 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok' });
 });
 
-// ── Setup: public status polling for Lovable frontend (no auth) ──
+// ── Auth middleware ────────────────────────────────────────────────
+// Everything below /health requires the key. The Lovable frontend reaches
+// /setup/* and /support through the wa-setup edge function, which checks the
+// user's tenant membership and adds the key server-side.
+app.use((req, res, next) => {
+  const apiKey = req.headers['x-api-key'];
+  if (!apiKey || apiKey !== process.env.WA_API_KEY) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  next();
+});
+
+// ── Setup: status polling (via wa-setup edge function) ───────────
 // Also triggers session creation if not yet started.
 app.get('/setup/:tenantId/status', async (req, res) => {
   try {
@@ -47,7 +61,7 @@ app.get('/setup/:tenantId/status', async (req, res) => {
   }
 });
 
-// ── Setup: QR pubblico per Lovable (no auth) ─────────────────────
+// ── Setup: QR (via wa-setup edge function) ───────────────────────
 app.get('/setup/:tenantId/qr', async (req, res) => {
   try {
     const { sessions } = require('./sessionManager');
@@ -63,7 +77,7 @@ app.get('/setup/:tenantId/qr', async (req, res) => {
   }
 });
 
-// ── Setup: logout — disconnette e cancella credenziali MongoDB (no auth) ──
+// ── Setup: logout — disconnette e cancella credenziali MongoDB ───
 app.post('/setup/:tenantId/logout', async (req, res) => {
   try {
     await logoutSession(req.params.tenantId);
@@ -73,7 +87,7 @@ app.post('/setup/:tenantId/logout', async (req, res) => {
   }
 });
 
-// ── POST /support (no auth — destinazione hardcoded al numero supporto) ──
+// ── POST /support (destinazione hardcoded al numero supporto) ────
 const SUPPORT_PHONE = '393927065684';
 app.post('/support', async (req, res) => {
   const { tenantId, tenantName, category, message } = req.body;
@@ -95,15 +109,6 @@ app.post('/support', async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
-});
-
-// ── Auth middleware ────────────────────────────────────────────────
-app.use((req, res, next) => {
-  const apiKey = req.headers['x-api-key'];
-  if (!apiKey || apiKey !== process.env.WA_API_KEY) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
-  next();
 });
 
 // ── GET /status/:tenantId ─────────────────────────────────────────
