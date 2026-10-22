@@ -30,6 +30,33 @@ describe('Auth middleware', () => {
       .set('X-API-Key', 'wrong-key');
     expect(res.status).toBe(401);
   });
+
+  it.each([
+    ['get', '/setup/tenant1/status'],
+    ['get', '/setup/tenant1/qr'],
+    ['post', '/setup/tenant1/logout'],
+    ['post', '/support'],
+  ])('returns 401 on %s %s without API key', async (method, path) => {
+    const res = await request(app)[method](path).send({ tenantId: 'tenant1', message: 'x' });
+    expect(res.status).toBe(401);
+    expect(getOrCreateSession).not.toHaveBeenCalled();
+  });
+
+  it('serves /health without API key', async () => {
+    const res = await request(app).get('/health');
+    expect(res.status).toBe(200);
+  });
+});
+
+describe('GET /setup/:tenantId/status', () => {
+  it('returns status with API key', async () => {
+    getOrCreateSession.mockResolvedValue({ status: 'connected' });
+    const res = await request(app)
+      .get('/setup/tenant1/status')
+      .set('X-API-Key', 'test-key');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ status: 'connected' });
+  });
 });
 
 describe('GET /status/:tenantId', () => {
