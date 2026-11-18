@@ -2,8 +2,10 @@
 APScheduler jobs for appointment reminders and confirmations.
 
 Jobs:
-1. Morning confirmation (cron 08:00): confirm/cancel/modify for pending appointments TOMORROW
-2. Reminder 1h before appointment (every 5 min): only for confirmed appointments
+1. Morning confirmation (cron 09:00, tenant cloud_api): confirm/cancel/modify for pending appointments TOMORROW
+2. Reminder 1h before appointment (every 5 min, tenant cloud_api): only for confirmed appointments
+3. Day notifications (every 5 min, tenant unofficial): conferme, modifiche, spostamenti,
+   annullamenti e promemoria del giorno prima, calcolati per cliente e giorno
 """
 
 import asyncio
@@ -16,7 +18,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from src.supabase_client import db_call
 from src.whatsapp_api import send_template_message, send_text_message, send_button_message
 from src.utils import format_datetime_italian
-from src.whatsapp_unofficial import send_message as send_unofficial_message
+from src.day_notifications import run_day_notifications
 
 logger = logging.getLogger("BOT.scheduler")
 
@@ -148,7 +150,7 @@ async def _send_morning_confirmations():
         if not phone_number_id or not access_token:
             continue
 
-        # Salta tenant in modalità unofficial (gestiti da _job_reminder_day_before)
+        # Salta tenant in modalità unofficial (gestiti da _job_day_notifications)
         if tenant.get("wa_mode") == "unofficial":
             continue
 
@@ -325,336 +327,19 @@ async def _send_reminder_1h():
                 sentry_sdk.capture_exception(e)
 
 
-# ─── Job: Conferma prenotazione (al momento della creazione) ─────
+# ─── Job: Notifiche per cliente e giorno (tenant unofficial) ─────
+# Sostituisce "conferma prenotazione" e "promemoria giorno prima":
+# vedi src/day_notifications.py
 
 
-def _job_booking_confirmation():
-    """Send booking confirmation message when a new appointment is created."""
+def _job_day_notifications():
+    """Conferme, modifiche, spostamenti, annullamenti e promemoria per i tenant unofficial."""
     try:
-        _run_async(_send_booking_confirmation())
+        _run_async(run_day_notifications())
     except Exception as e:
-        logger.exception(f"Error in booking_confirmation job: {e}")
+        logger.exception(f"Error in day_notifications job: {e}")
         if _SENTRY:
             sentry_sdk.capture_exception(e)
-
-
-async def _send_booking_confirmation():
-    """
-    Trova appuntamenti creati negli ultimi 6 minuti (tenant unofficial)
-    che non hanno ancora ricevuto la conferma di prenotazione.
-    Raggruppa per cliente: se più appuntamenti sono stati creati insieme,
-    invia un unico messaggio con la stessa struttura del promemoria giorno prima.
-    """
-    now = datetime.now(timezone.utc)
-    window_start = now - timedelta(minutes=15)
-
-    GIORNI = ["lunedì", "martedì", "mercoledì", "giovedì", "venerdì", "sabato", "domenica"]
-    MESI = ["gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno",
-            "luglio", "agosto", "settembre", "ottobre", "novembre", "dicembre"]
-
-    try:
-        response = db_call(
-            lambda sb: (
-                sb.table("appointments")
-                .select(
-                    "id, start_at, end_at, notes, booking_confirm_sent_at, "
-                    "client:clients(id, whatsapp_phone, name), "
-                    "service:services(name), "
-                    "tenant:tenants(id, wa_mode)"
-                )
-                .in_("status", ["pending", "confirmed"])
-                .is_("booking_confirm_sent_at", "null")
-                .gte("created_at", window_start.isoformat())
-                .order("start_at")
-                .execute()
-            ),
-            label="Booking confirmation query",
-        )
-    except Exception as e:
-        logger.error(f"Booking confirmation query error: {e}")
-        return
-
-    # Raggruppa per (tenant_id, client_id) — tutti gli appuntamenti creati nel window 15min → unico messaggio
-    to_process: dict[tuple, dict] = {}
-    for appt in response.data:
-        if appt.get("booking_confirm_sent_at"):
-            continue
-        client = appt.get("client")
-        tenant = appt.get("tenant")
-        if not client or not tenant:
-            continue
-        if tenant.get("wa_mode") != "unofficial":
-            continue
-        if not client.get("whatsapp_phone"):
-            continue
-
-        key = (tenant["id"], client["id"])
-        if key not in to_process:
-            to_process[key] = {"client": client, "tenant": tenant, "appts": []}
-        to_process[key]["appts"].append(appt)
-
-    def build_groups(appts):
-        sorted_appts = sorted(appts, key=lambda a: a["start_at"])
-        groups = []
-        current = [sorted_appts[0]]
-        for i in range(1, len(sorted_appts)):
-            prev_end = datetime.fromisoformat(sorted_appts[i-1]["end_at"].replace("Z", "+00:00"))
-            curr_start = datetime.fromisoformat(sorted_appts[i]["start_at"].replace("Z", "+00:00"))
-            if prev_end == curr_start:
-                current.append(sorted_appts[i])
-            else:
-                groups.append(current)
-                current = [sorted_appts[i]]
-        groups.append(current)
-        return groups
-
-    for (tenant_id, client_id), data in to_process.items():
-        client = data["client"]
-        appts = data["appts"]
-
-        first_name = _first_name(client.get("name") or "")
-        phone = client["whatsapp_phone"].lstrip("+")
-
-        groups = build_groups(appts)
-
-        if len(groups) == 1 and len(groups[0]) == 1:
-            a = groups[0][0]
-            service_name = a.get("service", {}).get("name", "Appuntamento") if a.get("service") else "Appuntamento"
-            start_at = datetime.fromisoformat(a["start_at"].replace("Z", "+00:00")).astimezone(ROME_TZ)
-            giorno = GIORNI[start_at.weekday()]
-            data_str = f"{giorno} {start_at.day} {MESI[start_at.month - 1]}"
-            time_str = start_at.strftime("%H:%M")
-            message = (
-                f"Gentile {first_name},\n\n"
-                f"La sua prenotazione è confermata:\n"
-                f"• *{service_name}*: {data_str} alle *{time_str}*\n\n"
-                f"La aspettiamo!"
-            )
-        else:
-            lines = []
-            for group in groups:
-                services = " + ".join(
-                    a.get("service", {}).get("name", "Appuntamento") if a.get("service") else "Appuntamento"
-                    for a in group
-                )
-                start_at = datetime.fromisoformat(group[0]["start_at"].replace("Z", "+00:00")).astimezone(ROME_TZ)
-                giorno = GIORNI[start_at.weekday()]
-                data_str = f"{giorno} {start_at.day} {MESI[start_at.month - 1]}"
-                time_str = start_at.strftime("%H:%M")
-                lines.append(f"• *{services}*: {data_str} alle *{time_str}*")
-            message = (
-                f"Gentile {first_name},\n\n"
-                f"I Suoi appuntamenti sono stati prenotati:\n"
-                + "\n".join(lines)
-                + "\n\nLa aspettiamo!"
-            )
-
-        success = await send_unofficial_message(tenant_id, phone, message)
-        if success:
-            now_utc = datetime.now(timezone.utc).isoformat()
-            for a in appts:
-                _mark_sent(a["id"], "booking_confirm_sent_at", now_utc)
-            logger.info(f"Booking confirmation sent for client {client_id} ({len(appts)} appointments)")
-        else:
-            logger.error(f"Failed to send booking confirmation for client {client_id}")
-
-
-# ─── Job: Reminder giorno prima (tenant unofficial) ──────────────
-
-
-def _job_reminder_day_before():
-    """Send day-before reminder for unofficial WA tenants."""
-    try:
-        _run_async(_send_reminder_day_before())
-    except Exception as e:
-        logger.exception(f"Error in reminder_day_before job: {e}")
-        if _SENTRY:
-            sentry_sdk.capture_exception(e)
-
-
-async def _send_reminder_day_before():
-    """
-    Trova gli appuntamenti di DOMANI (Europe/Rome) per tenant con
-    wa_mode='unofficial' il cui momento di invio (24h prima dell'appuntamento)
-    è già passato e che non hanno ancora ricevuto il promemoria.
-
-    Non è una finestra secca: se un invio viene perso (es. Supabase
-    irraggiungibile) viene recuperato al primo giro utile, invece di restare
-    perso per sempre.
-
-    Raggruppa per cliente: se un cliente ha più appuntamenti lo stesso giorno,
-    invia un unico messaggio con tutti elencati e marca tutti come inviati.
-    """
-    now = datetime.now(timezone.utc)
-
-    # Confini di domani (Europe/Rome) convertiti in UTC per la query
-    tomorrow = (datetime.now(ROME_TZ) + timedelta(days=1)).date()
-    tomorrow_start = ROME_TZ.localize(
-        datetime.combine(tomorrow, datetime.min.time())
-    ).astimezone(timezone.utc)
-    tomorrow_end = ROME_TZ.localize(
-        datetime.combine(tomorrow + timedelta(days=1), datetime.min.time())
-    ).astimezone(timezone.utc)
-
-    # Il promemoria è "dovuto" da 24h07 prima dell'appuntamento in avanti
-    due_limit = now + timedelta(hours=24, minutes=7, seconds=30)
-    upper_bound = min(tomorrow_end, due_limit)
-
-    if upper_bound <= tomorrow_start:
-        return
-
-    try:
-        response = db_call(
-            lambda sb: (
-                sb.table("appointments")
-                .select(
-                    "id, start_at, notes, reminder_day_before_sent_at, "
-                    "client:clients(id, whatsapp_phone, name, reminder_morning_enabled), "
-                    "service:services(name), "
-                    "tenant:tenants(id, wa_mode)"
-                )
-                .in_("status", ["pending", "confirmed"])
-                .is_("reminder_day_before_sent_at", "null")
-                .gte("start_at", tomorrow_start.isoformat())
-                .lt("start_at", upper_bound.isoformat())
-                .order("start_at")
-                .execute()
-            ),
-            label="Reminder day before query",
-        )
-    except Exception as e:
-        logger.error(f"Reminder day before query error: {e}")
-        return
-
-    # Raccogli i clienti da processare (skip già inviati o non validi)
-    # chiave: (tenant_id, client_id) → dati cliente + primo appuntamento trigger
-    to_process: dict[tuple, dict] = {}
-
-    for appt in response.data:
-        if appt.get("reminder_day_before_sent_at"):
-            continue
-
-        client = appt.get("client")
-        tenant = appt.get("tenant")
-        if not client or not tenant:
-            continue
-        if tenant.get("wa_mode") != "unofficial":
-            continue
-        if not client.get("reminder_morning_enabled", True):
-            continue
-        if not client.get("whatsapp_phone"):
-            continue
-
-        key = (tenant["id"], client["id"])
-        if key not in to_process:
-            to_process[key] = {"client": client, "tenant": tenant, "trigger_appt": appt}
-
-    for (tenant_id, client_id), data in to_process.items():
-        client = data["client"]
-        tenant = data["tenant"]
-        trigger_appt = data["trigger_appt"]
-
-        # Calcola il giorno dell'appuntamento trigger in Europe/Rome
-        trigger_start = datetime.fromisoformat(trigger_appt["start_at"].replace("Z", "+00:00"))
-        appt_day = trigger_start.astimezone(ROME_TZ).date()
-        day_start_utc = ROME_TZ.localize(
-            datetime.combine(appt_day, datetime.min.time())
-        ).astimezone(timezone.utc)
-        day_end_utc = ROME_TZ.localize(
-            datetime.combine(appt_day + timedelta(days=1), datetime.min.time())
-        ).astimezone(timezone.utc)
-
-        client_name = client.get("name") or ""
-        phone = client["whatsapp_phone"].lstrip("+")
-
-        # Raggruppa appuntamenti consecutivi (end_at di uno == start_at del successivo)
-        def build_groups(appts):
-            groups = []
-            current = [appts[0]]
-            for i in range(1, len(appts)):
-                prev_end = datetime.fromisoformat(appts[i-1]["end_at"].replace("Z", "+00:00"))
-                curr_start = datetime.fromisoformat(appts[i]["start_at"].replace("Z", "+00:00"))
-                if prev_end == curr_start:
-                    current.append(appts[i])
-                else:
-                    groups.append(current)
-                    current = [appts[i]]
-            groups.append(current)
-            return groups
-
-        # Recupera tutti gli appuntamenti del cliente in quel giorno (con end_at
-        # per poter raggruppare quelli consecutivi)
-        try:
-            appts_full_resp = db_call(
-                lambda sb: (
-                    sb.table("appointments")
-                    .select("id, start_at, end_at, notes, reminder_day_before_sent_at, service:services(name)")
-                    .in_("status", ["pending", "confirmed"])
-                    .eq("client_id", client_id)
-                    .gte("start_at", day_start_utc.isoformat())
-                    .lt("start_at", day_end_utc.isoformat())
-                    .order("start_at")
-                    .execute()
-                ),
-                label=f"Appuntamenti del giorno per cliente {client_id}",
-            )
-        except Exception as e:
-            logger.error(f"Failed to fetch full appointments for client {client_id}: {e}")
-            continue
-
-        appts_to_notify = [
-            a for a in appts_full_resp.data
-            if not a.get("reminder_day_before_sent_at")
-        ]
-        if not appts_to_notify:
-            continue
-
-        groups = build_groups(appts_to_notify)
-
-        first_name = _first_name(client_name)
-
-        if len(groups) == 1 and len(groups[0]) == 1:
-            # Singolo appuntamento
-            a = groups[0][0]
-            service_name = a.get("service", {}).get("name", "Appuntamento") if a.get("service") else "Appuntamento"
-            time_str = datetime.fromisoformat(a["start_at"].replace("Z", "+00:00")).astimezone(ROME_TZ).strftime("%H:%M")
-            message = (
-                f"Gentile {first_name},\n\n"
-                f"Le ricordiamo il Suo appuntamento di domani:\n"
-                f"• *{service_name}*: alle *{time_str}*\n\n"
-                f"La aspettiamo!"
-            )
-        else:
-            lines = []
-            for group in groups:
-                services = " + ".join(
-                    a.get("service", {}).get("name", "Appuntamento") if a.get("service") else "Appuntamento"
-                    for a in group
-                )
-                time_str = datetime.fromisoformat(group[0]["start_at"].replace("Z", "+00:00")).astimezone(ROME_TZ).strftime("%H:%M")
-                lines.append(f"• *{services}* alle *{time_str}*")
-            message = (
-                f"Gentile {first_name},\n\n"
-                f"Le ricordiamo i Suoi appuntamenti per domani:\n"
-                + "\n".join(lines)
-                + "\n\nLa aspettiamo!"
-            )
-
-        success = await send_unofficial_message(tenant_id, phone, message)
-        if success:
-            now_utc = datetime.now(timezone.utc).isoformat()
-            for a in appts_to_notify:
-                _mark_sent(a["id"], "reminder_day_before_sent_at", now_utc)
-            logger.info(
-                f"Day-before reminder sent for client {client_id} "
-                f"({len(appts_to_notify)} appointments on {appt_day})"
-            )
-        else:
-            logger.error(f"Failed to send day-before reminder for client {client_id}")
-            if _SENTRY:
-                sentry_sdk.capture_exception(
-                    Exception(f"WA unofficial send failed for client {client_id}")
-                )
 
 
 # ─── Scheduler lifecycle ─────────────────────────────────────────
@@ -687,26 +372,17 @@ def start_scheduler():
         name="1h appointment reminder",
     )
 
-    # Day-before reminder (unofficial WA tenants, ogni 5 minuti)
+    # Notifiche per cliente e giorno (unofficial WA tenants, ogni 5 minuti)
     _scheduler.add_job(
-        _job_reminder_day_before,
+        _job_day_notifications,
         "interval",
         minutes=5,
-        id="reminder_day_before",
-        name="Day-before reminder (unofficial WA)",
-    )
-
-    # Booking confirmation (unofficial WA tenants, ogni 5 minuti)
-    _scheduler.add_job(
-        _job_booking_confirmation,
-        "interval",
-        minutes=5,
-        id="booking_confirmation",
-        name="Booking confirmation (unofficial WA)",
+        id="day_notifications",
+        name="Day notifications (unofficial WA)",
     )
 
     _scheduler.start()
-    logger.info("Scheduler started with 4 jobs: morning_confirmation (09:00), reminder_1h (every 5 min), reminder_day_before (every 5 min), booking_confirmation (every 5 min)")
+    logger.info("Scheduler started with 3 jobs: morning_confirmation (09:00), reminder_1h (every 5 min), day_notifications (every 5 min)")
 
 
 def stop_scheduler():
