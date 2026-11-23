@@ -92,7 +92,7 @@ function extractFields(obj) {
   pick('errorCode', obj.errorCode);
   pick('msgId', obj.msgId || obj.id || key?.id || attrs?.id);
   pick('retryCount', obj.retryCount ?? attrs?.count);
-  pick('type', attrs?.type);
+  pick('msgType', attrs?.type);
   pick('sendToAll', obj.sendToAll);
   const err = obj.err || obj.error;
   if (err) pick('error', err.message || String(err));
@@ -137,7 +137,7 @@ async function ensureIndex(coll) {
 function recordEvent(tenantId, type, fields = {}) {
   try {
     if (!allowEvent(tenantId || 'unknown')) return;
-    const doc = { ts: new Date(), tenantId: tenantId || 'unknown', type, ...fields };
+    const doc = { ts: new Date(), tenantId: tenantId || 'unknown', ...fields, type };
     const line = { evt: type, tenantId: doc.tenantId };
     for (const [k, v] of Object.entries(fields)) line[k] = maskPhone(v);
     console.log(JSON.stringify(line));

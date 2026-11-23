@@ -23,7 +23,7 @@ describe('maskPhone', () => {
 describe('extractFields', () => {
   it('keeps scalar identifiers only, never buffers or keys', () => {
     const f = extractFields({ attrs: { from: '123@lid', id: 'MSG', count: '2', type: 'retry' }, key: { id: '' }, privKey: Buffer.from('x') });
-    expect(f).toEqual({ jid: '123@lid', msgId: 'MSG', retryCount: '2', type: 'retry' });
+    expect(f).toEqual({ jid: '123@lid', msgId: 'MSG', retryCount: '2', msgType: 'retry' });
   });
 });
 
