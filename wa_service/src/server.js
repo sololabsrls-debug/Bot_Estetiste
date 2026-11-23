@@ -10,16 +10,19 @@
  *   POST /support                  → { success: true } [requires X-API-Key]
  *   GET  /status/:tenantId         → { status: ... }  [requires X-API-Key]
  *   GET  /qr/:tenantId             → PNG QR code      [requires X-API-Key]
- *   POST /send                     → { success: true } [requires X-API-Key]
+ *   POST /send                     → { success: true, msgId } [requires X-API-Key]
+ *   GET  /diag/:tenantId?hours=24  → riepilogo eventi diagnostici [requires X-API-Key]
  *
  * All authenticated endpoints require header: X-API-Key: <WA_API_KEY>
  */
 
 const express = require('express');
 const qrcode = require('qrcode');
-const { getOrCreateSession, logoutSession } = require('./sessionManager');
+const { getOrCreateSession, logoutSession, resetContactSessions, ensureMongoose } = require('./sessionManager');
 const { sendWithAntibanMeasures } = require('./antibanUtils');
-const { clearContactSessionKeys, logSend } = require('./mongoUtils');
+const { logSend } = require('./mongoUtils');
+const { recordEvent, getDiagnostics } = require('./waEvents');
+const { saveSentMessage } = require('./sentStore');
 
 const app = express();
 app.use(express.json());
@@ -155,30 +158,55 @@ app.post('/send', async (req, res) => {
     if (session.status !== 'connected') {
       return res.status(503).json({ error: 'Session not connected', status: session.status });
     }
-    // Pulisce session keys PRIMA di ogni invio → handshake fresco → desync impossibile
-    await clearContactSessionKeys(tenantId, phone);
+    // Pulisce le sessioni Signal del contatto (numero + LID) PRIMA di ogni invio → handshake fresco
+    const { lidUser } = await resetContactSessions(tenantId, session.client, phone, 'pre-send');
     let sent;
+    let attempts = 1;
     try {
       sent = await sendWithAntibanMeasures(session.client, phone, message, imageUrl || null, true);
     } catch (firstErr) {
       console.warn(`[send] First attempt failed (${firstErr.message}), retrying in 4s...`);
       await new Promise(r => setTimeout(r, 4000));
+      attempts = 2;
       try {
         sent = await sendWithAntibanMeasures(session.client, phone, message, imageUrl || null, true);
       } catch (secondErr) {
         console.warn(`[send] Second attempt failed (${secondErr.message}), final retry in 6s...`);
         await new Promise(r => setTimeout(r, 6000));
+        attempts = 3;
         sent = await sendWithAntibanMeasures(session.client, phone, message, imageUrl || null, true);
       }
     }
     if (sent?.key?.id && sent?.message) {
       session.sentMessages.set(sent.key.id, sent.message);
       setTimeout(() => session.sentMessages.delete(sent.key.id), 5 * 60 * 1000);
+      await saveSentMessage(tenantId, sent);
     }
+    recordEvent(tenantId, 'send_ok', {
+      phone: String(phone).replace(/^\+/, ''),
+      lid: lidUser || undefined,
+      msgId: sent?.key?.id,
+      jid: sent?.key?.remoteJid,
+      attempts,
+      withImage: !!imageUrl,
+    });
     await logSend({ tenantId, phone, success: true, sessionReset: true });
-    res.json({ success: true });
+    res.json({ success: true, msgId: sent?.key?.id || null });
   } catch (err) {
+    recordEvent(tenantId, 'send_fail', { phone: String(phone).replace(/^\+/, ''), error: String(err.message).slice(0, 200) });
     await logSend({ tenantId, phone, success: false, error: err.message });
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /diag/:tenantId?hours=24 ──────────────────────────────────
+// Riepilogo eventi diagnostici: retry, errori di decifratura, disconnessioni.
+app.get('/diag/:tenantId', async (req, res) => {
+  try {
+    const hours = Math.min(Math.max(parseInt(req.query.hours, 10) || 24, 1), 24 * 30);
+    await ensureMongoose();
+    res.json(await getDiagnostics(req.params.tenantId, hours));
+  } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });

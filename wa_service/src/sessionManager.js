@@ -13,18 +13,12 @@ const { default: makeWASocket, DisconnectReason, fetchLatestBaileysVersion } = r
 const mongoose = require('mongoose');
 const { useMongoAuthState } = require('./mongoAuthState');
 const { clearContactSessionKeys, logSend, clearTenantSession } = require('./mongoUtils');
+const { recordEvent, makeBaileysLogger } = require('./waEvents');
+const { getSentMessage } = require('./sentStore');
 
 // Map<tenantId, { client, status, qrCode }>
 const sessions = new Map();
 const retryCounts = new Map();
-
-// Silent logger — Baileys is very verbose by default
-const SILENT_LOGGER = {
-  level: 'silent',
-  trace: () => {}, debug: () => {}, info: () => {},
-  warn:  () => {}, error: () => {}, fatal: () => {},
-  child: () => SILENT_LOGGER,
-};
 
 async function ensureMongoose() {
   const state = mongoose.connection.readyState;
@@ -48,6 +42,54 @@ async function getOrCreateSession(tenantId) {
   return _createSession(tenantId);
 }
 
+/**
+ * Resolve the phone-number user and the LID user of a contact.
+ * Baileys 7 encrypts to the LID address when it knows the mapping, so a
+ * "fresh handshake" reset must clear both the PN and the LID sessions.
+ * @returns {{ pnUser: string|null, lidUser: string|null }}
+ */
+async function resolveContactIds(sock, jidOrPhone) {
+  const raw = String(jidOrPhone || '');
+  const isLid = raw.endsWith('@lid');
+  const user = raw.split('@')[0].split(':')[0].replace(/^\+/, '');
+  let pnUser = isLid ? null : user || null;
+  let lidUser = isLid ? user || null : null;
+  const lidMapping = sock?.signalRepository?.lidMapping;
+  try {
+    if (lidMapping && pnUser && !lidUser) {
+      const lid = await lidMapping.getLIDForPN(`${pnUser}@s.whatsapp.net`);
+      if (lid) lidUser = lid.split('@')[0].split(':')[0];
+    } else if (lidMapping && lidUser && !pnUser) {
+      const pn = await lidMapping.getPNForLID(`${lidUser}@lid`);
+      if (pn) pnUser = pn.split('@')[0].split(':')[0];
+    }
+  } catch (err) {
+    recordEvent(sock?.__tenantId, 'lid_resolve_failed', { jid: raw, error: err.message });
+  }
+  return { pnUser, lidUser };
+}
+
+/** Delete PN + LID Signal sessions of one contact (forces a fresh handshake). */
+async function resetContactSessions(tenantId, sock, jidOrPhone, trigger) {
+  const { pnUser, lidUser } = await resolveContactIds(sock, jidOrPhone);
+  // Never reset the sessions of our own account (the aesthetician's phone)
+  const me = sock?.authState?.creds?.me || sock?.user || {};
+  const ownUsers = [me.id, me.lid].filter(Boolean).map(j => String(j).split('@')[0].split(':')[0]);
+  if ((pnUser && ownUsers.includes(pnUser)) || (lidUser && ownUsers.includes(lidUser))) {
+    recordEvent(tenantId, 'session_reset_skipped_own', { trigger });
+    return { pnUser, lidUser, deleted: 0 };
+  }
+  const { deleted, ids } = await clearContactSessionKeys(tenantId, pnUser, lidUser);
+  recordEvent(tenantId, 'session_reset', {
+    trigger,
+    phone: pnUser || undefined,
+    lid: lidUser || undefined,
+    deleted,
+    ids: ids.slice(0, 10).join(' | '),
+  });
+  return { pnUser, lidUser, deleted };
+}
+
 async function _createSession(tenantId) {
   await ensureMongoose();
 
@@ -57,21 +99,29 @@ async function _createSession(tenantId) {
   try {
     ({ version } = await fetchLatestBaileysVersion());
   } catch {
-    version = [2, 3000, 1015901307];  // fallback if network unavailable
+    version = undefined;  // Baileys falls back to its bundled version
   }
 
   const session = { client: null, status: 'initializing', qrCode: null, sentMessages: new Map() };
   sessions.set(tenantId, session);
 
   const sock = makeWASocket({
-    version,
+    ...(version ? { version } : {}),
     auth: state,
-    printQRInTerminal: false,
-    logger: SILENT_LOGGER,
+    logger: makeBaileysLogger(tenantId),
     browser: ['Bot Estetiste', 'Chrome', '1.0.0'],
     markOnlineOnConnect: false,
-    getMessage: async (key) => session.sentMessages.get(key.id),
+    syncFullHistory: false,
+    // Retry requests: in-memory first (fast), then MongoDB (survives reconnects/redeploys)
+    getMessage: async (key) => {
+      const cached = session.sentMessages.get(key.id);
+      if (cached) return cached;
+      const stored = await getSentMessage(tenantId, key.id);
+      recordEvent(tenantId, stored ? 'retry_served_from_store' : 'retry_store_miss', { msgId: key.id, jid: key.remoteJid });
+      return stored;
+    },
   });
+  sock.__tenantId = tenantId;
 
   sock.ev.on('creds.update', saveCreds);
 
@@ -83,6 +133,7 @@ async function _createSession(tenantId) {
     }
     if (connection === 'open') {
       console.log(`[${tenantId}] Connected`);
+      recordEvent(tenantId, 'connection_open', { attempt: retryCounts.get(tenantId) || 0 });
       session.status = 'connected';
       session.qrCode = null;
       retryCounts.delete(tenantId);  // reset counter on success
@@ -90,7 +141,14 @@ async function _createSession(tenantId) {
     if (connection === 'close') {
       const statusCode = lastDisconnect?.error?.output?.statusCode;
       const loggedOut  = statusCode === DisconnectReason.loggedOut;
+      const reason = Object.keys(DisconnectReason).find(k => DisconnectReason[k] === statusCode) || 'unknown';
       console.log(`[${tenantId}] Disconnected (loggedOut=${loggedOut})`);
+      recordEvent(tenantId, 'connection_close', {
+        statusCode: statusCode ?? null,
+        reason,
+        loggedOut,
+        error: lastDisconnect?.error?.message ? String(lastDisconnect.error.message).slice(0, 200) : undefined,
+      });
       sessions.delete(tenantId);
       session.status  = 'disconnected';
       session.qrCode  = null;
@@ -104,6 +162,7 @@ async function _createSession(tenantId) {
           setTimeout(() => { reconnectPending.delete(tenantId); _createSession(tenantId); }, delay);
         } else {
           console.error(`[${tenantId}] Max reconnect attempts reached. Manual intervention needed.`);
+          recordEvent(tenantId, 'reconnect_gave_up', { attempts: retries - 1 });
           retryCounts.delete(tenantId);
         }
       }
@@ -115,16 +174,21 @@ async function _createSession(tenantId) {
     for (const update of updates) {
       if (update.update?.status === 0) { // 0 = ERROR
         const jid = update.key?.remoteJid || '';
-        const phone = jid.split('@')[0];
-        if (!phone) continue;
-        console.warn(`[messages.update] ERROR status=0 tenant=${tenantId} phone=${phone} fromMe=${update.key?.fromMe} id=${update.key?.id} participant=${update.key?.participant}`);
-        const cleared = await clearContactSessionKeys(tenantId, phone);
+        const user = jid.split('@')[0].split(':')[0];
+        if (!user) continue;
+        recordEvent(tenantId, 'delivery_error', {
+          jid,
+          fromMe: update.key?.fromMe,
+          msgId: update.key?.id,
+          participant: update.key?.participant,
+        });
+        const { pnUser, deleted } = await resetContactSessions(tenantId, sock, jid, 'messages.update');
         await logSend({
           tenantId,
-          phone,
+          phone: pnUser || jid.split('@')[0],
           success: false,
           error: 'messages.update ERROR status (Signal desync)',
-          sessionReset: cleared > 0,
+          sessionReset: deleted > 0,
           trigger: 'messages.update',
         });
       }
@@ -155,4 +219,4 @@ async function logoutSession(tenantId) {
   await clearTenantSession(tenantId);
 }
 
-module.exports = { getOrCreateSession, sessions, logoutSession };
+module.exports = { getOrCreateSession, sessions, logoutSession, resetContactSessions, resolveContactIds, ensureMongoose };

@@ -1,10 +1,7 @@
-// Suppress libsignal verbose errors that flood Railway logs (Bad MAC, Closing session, etc.)
-const _origError = console.error.bind(console);
-console.error = (...args) => {
-  const msg = args[0]?.toString?.() || '';
-  if (msg.includes('Bad MAC') || msg.includes('Session error') || msg.includes('Closing session') || msg.includes('SessionEntry')) return;
-  _origError(...args);
-};
+// libsignal prints full Signal session dumps (including private keys) via console.*.
+// Replace them with a per-minute counter summary. Must run before Baileys is loaded.
+const { installConsoleFilter } = require('./waEvents');
+installConsoleFilter();
 
 const app = require('./server');
 

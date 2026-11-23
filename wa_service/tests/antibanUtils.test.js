@@ -1,3 +1,6 @@
+// Baileys is ESM-only: mock the one helper antibanUtils imports (link previews)
+jest.mock('@whiskeysockets/baileys', () => ({ getUrlInfo: jest.fn().mockResolvedValue(undefined) }));
+
 const { sendWithAntibanMeasures, randomDelay } = require('../src/antibanUtils');
 
 describe('randomDelay', () => {
