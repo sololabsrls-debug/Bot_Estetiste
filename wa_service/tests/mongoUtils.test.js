@@ -1,6 +1,6 @@
 jest.mock('mongoose', () => ({ connection: { db: null } }));
 const mongoose = require('mongoose');
-const { contactSessionRegex, clearContactSessionKeys } = require('../src/mongoUtils');
+const { contactSessionRegex, clearContactSessionKeys, clearLoggedOutSession } = require('../src/mongoUtils');
 
 describe('contactSessionRegex', () => {
   const ids = [
@@ -46,5 +46,35 @@ describe('clearContactSessionKeys', () => {
     mongoose.connection.db = { collection: jest.fn(() => coll) };
     await expect(clearContactSessionKeys('t1', null, null)).resolves.toEqual({ deleted: 0, ids: [] });
     expect(coll.find).not.toHaveBeenCalled();
+  });
+});
+
+describe('clearLoggedOutSession', () => {
+  const makeDb = (credsDoc) => {
+    const creds = { findOne: jest.fn(async () => credsDoc), deleteOne: jest.fn(async () => ({ deletedCount: 1 })) };
+    const keys = { deleteMany: jest.fn(async () => ({ deletedCount: 7 })) };
+    mongoose.connection.db = { collection: jest.fn(n => (n === 'wa_creds' ? creds : keys)) };
+    return { creds, keys };
+  };
+
+  it('deletes keys and creds when the stored creds are the ones that were logged out', async () => {
+    const { creds, keys } = makeDb({ _id: 't1' });
+    await expect(clearLoggedOutSession('t1', 1234)).resolves.toEqual({ cleared: true, keysDeleted: 7 });
+    expect(creds.findOne.mock.calls[0][0]).toEqual({ _id: 't1', 'creds.registrationId': 1234 });
+    expect(keys.deleteMany).toHaveBeenCalledWith({ tenantId: 't1' });
+    expect(creds.deleteOne).toHaveBeenCalledWith({ _id: 't1', 'creds.registrationId': 1234 });
+  });
+
+  it('never deletes anything when the stored creds belong to a newer pairing', async () => {
+    const { creds, keys } = makeDb(null);
+    await expect(clearLoggedOutSession('t1', 1234)).resolves.toEqual({ cleared: false, keysDeleted: 0, reason: 'creds_changed_or_missing' });
+    expect(keys.deleteMany).not.toHaveBeenCalled();
+    expect(creds.deleteOne).not.toHaveBeenCalled();
+  });
+
+  it('does nothing without a registrationId', async () => {
+    const { creds } = makeDb({ _id: 't1' });
+    await expect(clearLoggedOutSession('t1', undefined)).resolves.toEqual({ cleared: false, keysDeleted: 0, reason: 'no_registration_id' });
+    expect(creds.findOne).not.toHaveBeenCalled();
   });
 });

@@ -35,6 +35,7 @@ jest.mock('../src/mongoUtils', () => ({
   clearContactSessionKeys: jest.fn(),
   logSend: jest.fn().mockResolvedValue(undefined),
   clearTenantSession: jest.fn().mockResolvedValue(undefined),
+  clearLoggedOutSession: jest.fn(),
 }));
 
 jest.mock('../src/sentStore', () => ({
@@ -56,7 +57,7 @@ jest.mock('../src/mongoAuthState', () => ({
 }));
 
 const { getOrCreateSession, sessions, resetContactSessions, resolveContactIds } = require('../src/sessionManager');
-const { clearContactSessionKeys } = require('../src/mongoUtils');
+const { clearContactSessionKeys, clearLoggedOutSession } = require('../src/mongoUtils');
 const { getSentMessage } = require('../src/sentStore');
 const { recordEvent } = require('../src/waEvents');
 
@@ -111,9 +112,41 @@ describe('getOrCreateSession', () => {
   });
 
   it('removes session from map when disconnected (logged out)', async () => {
+    clearLoggedOutSession.mockResolvedValue({ cleared: true, keysDeleted: 0 });
     await getOrCreateSession('tenant1');
     connectionUpdateHandler({ connection: 'close', lastDisconnect: { error: { output: { statusCode: 401 } } } });
     expect(sessions.has('tenant1')).toBe(false);
+  });
+
+  it('on 401 clears the dead creds (same registrationId) and blocks new sessions until done', async () => {
+    let release;
+    clearLoggedOutSession.mockImplementation(() => new Promise(r => { release = r; }));
+    require('../src/mongoAuthState').useMongoAuthState.mockResolvedValue({
+      state: { creds: { registrationId: 4321 }, keys: { get: jest.fn(), set: jest.fn() } },
+      saveCreds: jest.fn(),
+    });
+    await getOrCreateSession('tenant1');
+    connectionUpdateHandler({ connection: 'close', lastDisconnect: { error: { output: { statusCode: 401 } } } });
+    expect(clearLoggedOutSession).toHaveBeenCalledWith('tenant1', 4321);
+    await expect(getOrCreateSession('tenant1')).resolves.toEqual({ status: 'disconnected', client: null, qrCode: null });
+    release({ cleared: true, keysDeleted: 5 });
+    await new Promise(r => setImmediate(r));
+    expect(recordEvent).toHaveBeenCalledWith('tenant1', 'logged_out_creds_cleared', { cleared: true, keysDeleted: 5 });
+    const fresh = await getOrCreateSession('tenant1');
+    expect(fresh.status).toBe('initializing');
+  });
+
+  it('does not clear creds on a non-logout disconnect', async () => {
+    jest.useFakeTimers();
+    try {
+      // own tenant id: a 515 leaves the tenant in reconnectPending (timer cleared below)
+      await getOrCreateSession('tenant-515');
+      connectionUpdateHandler({ connection: 'close', lastDisconnect: { error: { output: { statusCode: 515 } } } });
+      expect(clearLoggedOutSession).not.toHaveBeenCalled();
+    } finally {
+      jest.clearAllTimers();
+      jest.useRealTimers();
+    }
   });
 });
 

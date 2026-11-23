@@ -74,4 +74,22 @@ async function clearTenantSession(tenantId) {
   }
 }
 
-module.exports = { clearContactSessionKeys, contactSessionRegex, logSend, clearTenantSession };
+/**
+ * WhatsApp unlinked this device (401 loggedOut): the stored credentials are dead and
+ * would make every new connection fail before a QR is shown. Delete them, but ONLY if
+ * the stored creds are still the ones that failed (same registrationId), so a newer
+ * pairing saved in the meantime is never touched.
+ * @returns {Promise<{cleared: boolean, keysDeleted: number, reason?: string}>}
+ */
+async function clearLoggedOutSession(tenantId, registrationId) {
+  if (!Number.isInteger(registrationId)) return { cleared: false, keysDeleted: 0, reason: 'no_registration_id' };
+  const db = mongoose.connection.db;
+  const filter = { _id: tenantId, 'creds.registrationId': registrationId };
+  const match = await db.collection('wa_creds').findOne(filter, { projection: { _id: 1 } });
+  if (!match) return { cleared: false, keysDeleted: 0, reason: 'creds_changed_or_missing' };
+  const keys = await db.collection('wa_keys').deleteMany({ tenantId });
+  const creds = await db.collection('wa_creds').deleteOne(filter);
+  return { cleared: creds.deletedCount === 1, keysDeleted: keys.deletedCount };
+}
+
+module.exports = { clearContactSessionKeys, contactSessionRegex, logSend, clearTenantSession, clearLoggedOutSession };

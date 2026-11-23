@@ -12,7 +12,7 @@
 const { default: makeWASocket, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
 const mongoose = require('mongoose');
 const { useMongoAuthState } = require('./mongoAuthState');
-const { clearContactSessionKeys, logSend, clearTenantSession } = require('./mongoUtils');
+const { clearContactSessionKeys, logSend, clearTenantSession, clearLoggedOutSession } = require('./mongoUtils');
 const { recordEvent, makeBaileysLogger } = require('./waEvents');
 const { getSentMessage } = require('./sentStore');
 
@@ -152,6 +152,15 @@ async function _createSession(tenantId) {
       sessions.delete(tenantId);
       session.status  = 'disconnected';
       session.qrCode  = null;
+      if (loggedOut) {
+        // Device unlinked: drop the dead credentials so the next request shows a fresh QR.
+        // While cleaning, getOrCreateSession answers 'disconnected' instead of reusing them.
+        reconnectPending.add(tenantId);
+        clearLoggedOutSession(tenantId, state.creds?.registrationId)
+          .then(r => recordEvent(tenantId, r.cleared ? 'logged_out_creds_cleared' : 'logged_out_creds_kept', r))
+          .catch(err => recordEvent(tenantId, 'logged_out_clear_failed', { error: String(err.message).slice(0, 200) }))
+          .finally(() => reconnectPending.delete(tenantId));
+      }
       if (!loggedOut) {
         const retries = (retryCounts.get(tenantId) || 0) + 1;
         if (retries <= 5) {
